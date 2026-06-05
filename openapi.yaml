@@ -1,0 +1,149 @@
+openapi: 3.0.3
+info:
+  title: PetBank — сервис заявок
+  description: |
+    Учебный «банк». Принимает заявку с персональными данными и возвращает решение.
+    Текущее правило: заявителю должно быть не меньше 18 лет.
+  version: 0.1.0
+servers:
+  - url: http://localhost:8000
+    description: Локальный запуск
+
+paths:
+  /applications:
+    post:
+      summary: Подать заявку
+      operationId: createApplication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplicationRequest"
+            examples:
+              approve:
+                summary: Совершеннолетний — будет одобрено
+                value:
+                  last_name: Иванов
+                  first_name: Иван
+                  middle_name: Иванович
+                  phone: "+79991234567"
+                  birth_date: "1990-05-15"
+                  amount: 100000
+              decline:
+                summary: Младше 18 — будет отказано
+                value:
+                  last_name: Петров
+                  first_name: Пётр
+                  phone: "+79990001122"
+                  birth_date: "2010-01-01"
+      responses:
+        "200":
+          description: Решение по заявке
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationDecision"
+        "400":
+          description: Ошибка в запросе или валидации
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /health:
+    get:
+      summary: Проверка живости сервиса
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Сервис работает
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+components:
+  schemas:
+    ApplicationRequest:
+      type: object
+      required: [last_name, first_name, phone, birth_date]
+      properties:
+        last_name:
+          type: string
+          description: Фамилия
+          example: Иванов
+        first_name:
+          type: string
+          description: Имя
+          example: Иван
+        middle_name:
+          type: string
+          description: Отчество (необязательно)
+          example: Иванович
+        phone:
+          type: string
+          description: Телефон
+          example: "+79991234567"
+        birth_date:
+          type: string
+          format: date
+          description: Дата рождения в формате YYYY-MM-DD
+          example: "1990-05-15"
+        amount:
+          type: number
+          description: Запрашиваемая сумма (необязательно)
+          example: 100000
+
+    ApplicationDecision:
+      type: object
+      properties:
+        application_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [approved, declined]
+        applicant:
+          type: object
+          properties:
+            full_name:
+              type: string
+              example: Иванов Иван Иванович
+            age:
+              type: integer
+              example: 36
+            phone:
+              type: string
+              example: "+79991234567"
+        reasons:
+          type: array
+          description: Причины отказа (пусто, если одобрено)
+          items:
+            type: string
+        received_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: validation_error
+        message:
+          type: string
+          example: Проверьте поля заявки
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
