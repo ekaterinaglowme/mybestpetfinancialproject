@@ -1,0 +1,36 @@
+### Проверка, что сервер жив
+GET http://localhost:8000/health
+
+### Заявка — должно ОДОБРИТЬ (18+)
+POST http://localhost:8000/applications
+Content-Type: application/json
+
+{
+  "last_name": "Иванов",
+  "first_name": "Иван",
+  "middle_name": "Иванович",
+  "phone": "+79991234567",
+  "birth_date": "1990-05-15",
+  "amount": 100000
+}
+
+### Заявка — должно ОТКАЗАТЬ (младше 18)
+POST http://localhost:8000/applications
+Content-Type: application/json
+
+{
+  "last_name": "Петров",
+  "first_name": "Пётр",
+  "phone": "+79990001122",
+  "birth_date": "2010-01-01"
+}
+
+### Ошибка валидации — нет даты рождения
+POST http://localhost:8000/applications
+Content-Type: application/json
+
+{
+  "last_name": "Сидоров",
+  "first_name": "Сидор",
+  "phone": "+79993334455"
+}
