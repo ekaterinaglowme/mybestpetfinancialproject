@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+wheels/
+*.whl
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# PyCharm / JetBrains
+.idea/
+
+# VS Code
+.vscode/
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+
+# Environment variables
+.env
+.env.local
+
+# macOS
+.DS_Store
