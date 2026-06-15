@@ -1,6 +1,5 @@
 """PetBank — простейший сервер приёма заявок.
 
-Зависимостей нет: только стандартная библиотека Python (http.server).
 Запуск:  python server.py   (или  python server.py 8080  — другой порт)
 
 Эндпоинты:
@@ -14,7 +13,10 @@ import os
 import sys
 import uuid
 from datetime import date, datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 # --- Бизнес-правила --------------------------------------------------------
 
@@ -117,79 +119,58 @@ def make_decision(cleaned):
     }
 
 
-# --- HTTP-слой -------------------------------------------------------------
+# --- HTTP-слой ---------------------------------------------------------------
 
-class Handler(BaseHTTPRequestHandler):
-    server_version = "PetBank/0.1"
+app = FastAPI(title="PetBank")
 
-    def _send_json(self, status, payload):
-        body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def do_GET(self):
-        path = self.path.rstrip("/") or "/"
-        if path == "/health":
-            self._send_json(200, {"status": "ok"})
-        elif path == "/":
-            self._send_json(200, {
-                "service": "PetBank",
-                "endpoints": ["POST /applications", "GET /health"],
-                "rule": f"возраст >= {MIN_AGE}",
-            })
-        else:
-            self._send_json(404, {"error": "not_found", "message": f"Неизвестный путь: {self.path}"})
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
-    def do_POST(self):
-        if self.path.rstrip("/") != "/applications":
-            self._send_json(404, {"error": "not_found", "message": f"Неизвестный путь: {self.path}"})
-            return
 
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            length = 0
+@app.get("/")
+def root():
+    return {
+        "service": "PetBank",
+        "endpoints": ["POST /applications", "GET /health"],
+        "rule": f"возраст {MIN_AGE}-{MAX_AGE}, страна не в стоп-листе",
+    }
 
-        raw = self.rfile.read(length) if length > 0 else b""
-        if not raw:
-            self._send_json(400, {"error": "bad_request", "message": "Пустое тело запроса"})
-            return
 
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            self._send_json(400, {"error": "bad_request", "message": "Тело запроса не является валидным JSON"})
-            return
+@app.post("/applications")
+async def create_application(request: Request):
+    raw = await request.body()
+    if not raw:
+        return JSONResponse(status_code=400, content={"error": "bad_request", "message": "Пустое тело запроса"})
 
-        cleaned, errors = validate_payload(payload)
-        if errors:
-            self._send_json(400, {
-                "error": "validation_error",
-                "message": "Проверьте поля заявки",
-                "details": errors,
-            })
-            return
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "bad_request", "message": "Тело запроса не является валидным JSON"},
+        )
 
-        self._send_json(200, make_decision(cleaned))
+    cleaned, errors = validate_payload(payload)
+    if errors:
+        return JSONResponse(status_code=400, content={
+            "error": "validation_error",
+            "message": "Проверьте поля заявки",
+            "details": errors,
+        })
 
-    def log_message(self, fmt, *args):
-        print(f"[{self.log_date_time_string()}] {self.address_string()} {fmt % args}")
+    return make_decision(cleaned)
 
 
 def run(host="0.0.0.0", port=None):
     port = port or int(os.environ.get("PORT", "8000"))
-    httpd = ThreadingHTTPServer((host, port), Handler)
     print(f"PetBank запущен: http://localhost:{port}  (Ctrl+C — остановить)")
-    print(f"Правило одобрения: возраст заявителя >= {MIN_AGE} лет")
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nОстановка сервера...")
-    finally:
-        httpd.server_close()
+    print(
+        f"Правило одобрения: возраст {MIN_AGE}-{MAX_AGE} лет, "
+        f"страна не в стоп-листе ({', '.join(sorted(BLOCKED_COUNTRIES))})"
+    )
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
