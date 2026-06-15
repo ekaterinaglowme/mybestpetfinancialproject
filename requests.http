@@ -10,7 +10,7 @@ Content-Type: application/json
   "first_name": "Иван",
   "middle_name": "Иванович",
   "phone": "+79991234567",
-  "birth_date": "1990-05-15",
+  "birth_date": "2000-05-15",
   "country": "Россия",
   "amount": 100000
 }
@@ -35,7 +35,7 @@ Content-Type: application/json
   "last_name": "Ли",
   "first_name": "Вэй",
   "phone": "+861234567890",
-  "birth_date": "1990-05-15",
+  "birth_date": "2000-05-15",
   "country": "Китай"
 }
 
