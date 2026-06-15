@@ -55,6 +55,7 @@ def _adult_payload():
         "last_name": "Иванов",
         "first_name": "Иван",
         "phone": "+79991234567",
+        "country": "Россия",
         "birth_date": born.isoformat(),
     }
 

@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from server import MIN_AGE, calculate_age, make_decision, validate_payload
+from server import MAX_AGE, MIN_AGE, calculate_age, make_decision, validate_payload
 
 
 # --- calculate_age ---------------------------------------------------------
@@ -44,6 +44,7 @@ def _valid_payload(**overrides):
         "middle_name": "Иванович",
         "phone": "+79991234567",
         "birth_date": "1990-05-15",
+        "country": "Россия",
         "amount": 100000,
     }
     base.update(overrides)
@@ -64,7 +65,7 @@ def test_validate_body_not_object():
     assert errors and errors[0]["field"] == "<body>"
 
 
-@pytest.mark.parametrize("field", ["last_name", "first_name", "phone"])
+@pytest.mark.parametrize("field", ["last_name", "first_name", "phone", "country"])
 def test_validate_required_string_missing(field):
     payload = _valid_payload()
     del payload[field]
@@ -72,7 +73,7 @@ def test_validate_required_string_missing(field):
     assert any(e["field"] == field for e in errors)
 
 
-@pytest.mark.parametrize("field", ["last_name", "first_name", "phone"])
+@pytest.mark.parametrize("field", ["last_name", "first_name", "phone", "country"])
 def test_validate_required_string_blank(field):
     _, errors = validate_payload(_valid_payload(**{field: "   "}))
     assert any(e["field"] == field for e in errors)
@@ -129,12 +130,13 @@ def test_validate_amount_negative_rejected():
 
 # --- make_decision ---------------------------------------------------------
 
-def _cleaned(birth_date):
+def _cleaned(birth_date, country="Россия"):
     return {
         "last_name": "Иванов",
         "first_name": "Иван",
         "middle_name": "Иванович",
         "phone": "+79991234567",
+        "country": country,
         "birth_date": birth_date,
     }
 
@@ -171,3 +173,33 @@ def test_decision_full_name_without_middle():
 def test_decision_has_application_id():
     result = make_decision(_cleaned(date(1990, 5, 15)))
     assert result["application_id"]
+
+
+# --- MAX_AGE и страна -------------------------------------------------------
+
+def test_decision_max_age_boundary_approved():
+    born = date.today().replace(year=date.today().year - MAX_AGE)
+    result = make_decision(_cleaned(born))
+    assert result["status"] == "approved"
+    assert result["reasons"] == []
+    assert result["applicant"]["age"] == MAX_AGE
+
+
+def test_decision_over_max_age_declined():
+    born = date.today().replace(year=date.today().year - (MAX_AGE + 1))
+    result = make_decision(_cleaned(born))
+    assert result["status"] == "declined"
+    assert any(str(MAX_AGE) in reason for reason in result["reasons"])
+
+
+def test_decision_blocked_country_declined():
+    born = date.today().replace(year=date.today().year - 30)
+    result = make_decision(_cleaned(born, country="Китай"))
+    assert result["status"] == "declined"
+    assert any("Китай" in reason for reason in result["reasons"])
+
+
+def test_decision_blocked_country_case_insensitive():
+    born = date.today().replace(year=date.today().year - 30)
+    result = make_decision(_cleaned(born, country="китай"))
+    assert result["status"] == "declined"
