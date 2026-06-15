@@ -7,7 +7,7 @@ Type=simple
 User=deploy
 Group=deploy
 WorkingDirectory=/opt/petbank
-ExecStart=/usr/bin/python3 /opt/petbank/server.py
+ExecStart=/opt/petbank/.venv/bin/python /opt/petbank/server.py
 Environment=PORT=8000
 Restart=on-failure
 RestartSec=2

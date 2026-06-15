@@ -7,7 +7,23 @@ CI/CD на GitHub Actions (`.github/workflows/ci.yml`):
 
 Деплой = `rsync` кода в `/opt/petbank` на сервере + `systemctl restart petbank`.
 Сервис — обычный systemd-юнит, работает под непривилегированным юзером `deploy`,
-слушает `:8000`. Никакого Docker и pip на проде: приложение на голой stdlib.
+слушает `:8000`. Никакого Docker на проде: зависимости (FastAPI/Uvicorn)
+ставятся в venv `/opt/petbank/.venv`, системный Python не трогаем.
+
+## ⚠️ Перед мёржем в main (переход на FastAPI)
+
+Сервис теперь требует `fastapi`/`uvicorn` (см. `requirements.txt`). CI
+деплоит автоматически при мёрже в `main` и сразу перезапускает сервис —
+если на VM ещё нет venv с этими зависимостями, `systemctl restart petbank`
+упадёт с `ModuleNotFoundError`, health-check в CI станет красным, прод
+будет недоступен.
+
+**До мёржа вручную на VM:**
+1. `python3 -m venv /opt/petbank/.venv && /opt/petbank/.venv/bin/pip install -r /opt/petbank/requirements.txt`
+   (нужен файл `/opt/petbank/requirements.txt` — например, разово
+   засинхронизировать код этой ветки на VM перед мёржем).
+2. Обновить `/etc/systemd/system/petbank.service` (новый `ExecStart`, см.
+   ниже) и выполнить `systemctl daemon-reload`.
 
 ## Что нужно в GitHub Secrets
 
@@ -42,15 +58,23 @@ visudo -c
 systemctl daemon-reload
 systemctl enable petbank
 
-# rsync для деплоя + фаервол
-apt-get update && apt-get install -y rsync
+# rsync для деплоя, venv-модуль + фаервол
+apt-get update && apt-get install -y rsync python3-venv
 ufw allow OpenSSH
 ufw allow 8000/tcp
 ufw --force enable
 ```
 
-После первого `rsync` кода в `/opt/petbank` поднять сервис:
-`systemctl start petbank` и проверить `curl http://127.0.0.1:8000/health`.
+После первого `rsync` кода в `/opt/petbank` — создать venv и поставить
+зависимости (повторять при каждом обновлении `requirements.txt`):
+
+```bash
+python3 -m venv /opt/petbank/.venv
+/opt/petbank/.venv/bin/pip install -r /opt/petbank/requirements.txt
+```
+
+Затем поднять сервис: `systemctl start petbank` и проверить
+`curl http://127.0.0.1:8000/health`.
 
 ## Рекомендации (не блокеры)
 
