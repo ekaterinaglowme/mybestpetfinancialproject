@@ -3,8 +3,9 @@ info:
   title: PetBank — сервис заявок
   description: |
     Учебный «банк». Принимает заявку с персональными данными и возвращает решение.
-    Текущее правило: заявителю должно быть не меньше 18 лет.
-  version: 0.1.0
+    Правила: возраст заявителя от 18 до 35 лет включительно, страна — не в стоп-листе
+    (по умолчанию запрещён «Китай»).
+  version: 0.2.0
 servers:
   - url: http://localhost:8000
     description: Локальный запуск
@@ -22,21 +23,31 @@ paths:
               $ref: "#/components/schemas/ApplicationRequest"
             examples:
               approve:
-                summary: Совершеннолетний — будет одобрено
+                summary: Возраст 18-35, страна разрешена — будет одобрено
                 value:
                   last_name: Иванов
                   first_name: Иван
                   middle_name: Иванович
                   phone: "+79991234567"
                   birth_date: "1990-05-15"
+                  country: Россия
                   amount: 100000
-              decline:
+              decline_age:
                 summary: Младше 18 — будет отказано
                 value:
                   last_name: Петров
                   first_name: Пётр
                   phone: "+79990001122"
                   birth_date: "2010-01-01"
+                  country: Россия
+              decline_country:
+                summary: Страна в стоп-листе — будет отказано
+                value:
+                  last_name: Ли
+                  first_name: Вэй
+                  phone: "+861234567890"
+                  birth_date: "1990-05-15"
+                  country: Китай
       responses:
         "200":
           description: Решение по заявке
@@ -71,7 +82,7 @@ components:
   schemas:
     ApplicationRequest:
       type: object
-      required: [last_name, first_name, phone, birth_date]
+      required: [last_name, first_name, phone, birth_date, country]
       properties:
         last_name:
           type: string
@@ -94,6 +105,10 @@ components:
           format: date
           description: Дата рождения в формате YYYY-MM-DD
           example: "1990-05-15"
+        country:
+          type: string
+          description: Страна заявителя. Заявки из стран из стоп-листа (по умолчанию "Китай") отклоняются.
+          example: Россия
         amount:
           type: number
           description: Запрашиваемая сумма (необязательно)

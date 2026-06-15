@@ -1,15 +1,20 @@
 # PetBank
 
 Учебный «банк». Сервер принимает заявку с персональными данными (ФИО, телефон, дата
-рождения) и возвращает решение: **approved** или **declined**.
+рождения, страна) и возвращает решение: **approved** или **declined**.
 
-Текущее правило одобрения одно: **заявителю должно быть не меньше 18 лет**.
+Правила одобрения:
+- заявителю должно быть от **18 до 35 лет** включительно;
+- страна заявителя не должна быть в стоп-листе (по умолчанию — «Китай»).
 
 ## Стек
 
-Только стандартная библиотека Python (`http.server`) — **никаких зависимостей и `pip install`**.
-Нужен только сам Python 3.8+. Скачать: https://www.python.org/downloads/
-(при установке поставьте галочку «Add python.exe to PATH»).
+[FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/).
+Нужен Python 3.8+ и установленные зависимости:
+
+```bash
+pip install -r requirements.txt
+```
 
 ## Запуск
 
@@ -46,6 +51,7 @@ PetBank запущен: http://localhost:8000  (Ctrl+C — остановить)
   "middle_name": "Иванович",
   "phone": "+79991234567",
   "birth_date": "1990-05-15",
+  "country": "Россия",
   "amount": 100000
 }
 ```
@@ -62,7 +68,8 @@ PetBank запущен: http://localhost:8000  (Ctrl+C — остановить)
 }
 ```
 
-Если возраст меньше 18 — `status: "declined"` и причина в `reasons`.
+Если возраст вне диапазона 18–35 или страна — в стоп-листе, `status: "declined"`,
+причины — в `reasons`.
 
 ## Как дёрнуть
 
@@ -77,13 +84,13 @@ PetBank запущен: http://localhost:8000  (Ctrl+C — остановить)
 ```bash
 curl -X POST http://localhost:8000/applications \
   -H "Content-Type: application/json" \
-  -d "{\"last_name\":\"Иванов\",\"first_name\":\"Иван\",\"phone\":\"+79991234567\",\"birth_date\":\"1990-05-15\"}"
+  -d "{\"last_name\":\"Иванов\",\"first_name\":\"Иван\",\"phone\":\"+79991234567\",\"birth_date\":\"1990-05-15\",\"country\":\"Россия\"}"
 ```
 
 **PowerShell:**
 
 ```powershell
-$body = @{ last_name="Иванов"; first_name="Иван"; phone="+79991234567"; birth_date="1990-05-15" } | ConvertTo-Json
+$body = @{ last_name="Иванов"; first_name="Иван"; phone="+79991234567"; birth_date="1990-05-15"; country="Россия" } | ConvertTo-Json
 Invoke-RestMethod -Uri http://localhost:8000/applications -Method Post -ContentType "application/json" -Body $body
 ```
 
@@ -91,6 +98,7 @@ Invoke-RestMethod -Uri http://localhost:8000/applications -Method Post -ContentT
 
 - `server.py` — сам сервер (вся логика тут).
 - `main.py` — точка входа (запускает `server.py`).
+- `requirements.txt` — зависимости для запуска (FastAPI, Uvicorn).
 - `openapi.yaml` — контракт API, импортируется в Postman.
 - `requests.http` — готовые запросы для PyCharm.
 
