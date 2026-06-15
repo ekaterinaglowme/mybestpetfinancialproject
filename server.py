@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # Единственное правило на текущем этапе: заявителю должно быть не меньше 18 лет.
 # Хотите "строго больше 18" — поменяйте сравнение в make_decision на age <= MIN_AGE.
 MIN_AGE = 18
+MAX_AGE = 35
 
 # Обязательные строковые поля заявки (персональные данные).
 REQUIRED_STRING_FIELDS = ("last_name", "first_name", "phone")
@@ -91,11 +92,16 @@ def make_decision(cleaned):
     reasons = []
     if age < MIN_AGE:
         reasons.append(f"Возраст заявителя {age} лет — меньше минимально допустимого {MIN_AGE}")
+    if age > MAX_AGE:
+        reasons.append(f"Возраст заявителя {age} лет — больше макс допустимого {MAX_AGE}")
 
     status = "approved" if not reasons else "declined"
     full_name = " ".join(
         part for part in (cleaned["last_name"], cleaned["first_name"], cleaned.get("middle_name")) if part
     )
+
+
+
 
     return {
         "application_id": str(uuid.uuid4()),
