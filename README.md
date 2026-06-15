@@ -50,7 +50,7 @@ PetBank запущен: http://localhost:8000  (Ctrl+C — остановить)
   "first_name": "Иван",
   "middle_name": "Иванович",
   "phone": "+79991234567",
-  "birth_date": "1990-05-15",
+  "birth_date": "2000-05-15",
   "country": "Россия",
   "amount": 100000
 }
@@ -62,7 +62,7 @@ PetBank запущен: http://localhost:8000  (Ctrl+C — остановить)
 {
   "application_id": "…uuid…",
   "status": "approved",
-  "applicant": { "full_name": "Иванов Иван Иванович", "age": 36, "phone": "+79991234567" },
+  "applicant": { "full_name": "Иванов Иван Иванович", "age": 26, "phone": "+79991234567" },
   "reasons": [],
   "received_at": "2026-06-05T16:52:00"
 }
@@ -84,13 +84,13 @@ PetBank запущен: http://localhost:8000  (Ctrl+C — остановить)
 ```bash
 curl -X POST http://localhost:8000/applications \
   -H "Content-Type: application/json" \
-  -d "{\"last_name\":\"Иванов\",\"first_name\":\"Иван\",\"phone\":\"+79991234567\",\"birth_date\":\"1990-05-15\",\"country\":\"Россия\"}"
+  -d "{\"last_name\":\"Иванов\",\"first_name\":\"Иван\",\"phone\":\"+79991234567\",\"birth_date\":\"2000-05-15\",\"country\":\"Россия\"}"
 ```
 
 **PowerShell:**
 
 ```powershell
-$body = @{ last_name="Иванов"; first_name="Иван"; phone="+79991234567"; birth_date="1990-05-15"; country="Россия" } | ConvertTo-Json
+$body = @{ last_name="Иванов"; first_name="Иван"; phone="+79991234567"; birth_date="2000-05-15"; country="Россия" } | ConvertTo-Json
 Invoke-RestMethod -Uri http://localhost:8000/applications -Method Post -ContentType "application/json" -Body $body
 ```
 
