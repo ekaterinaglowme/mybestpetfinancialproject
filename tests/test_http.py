@@ -1,52 +1,20 @@
 """Интеграционные тесты HTTP-слоя.
 
-Поднимаем настоящий сервер на свободном порту в фоновом потоке и дёргаем
-его через urllib — проверяем коды ответов и тело, как увидит реальный клиент.
+fastapi.testclient.TestClient гоняет ASGI-приложение in-process через тот же
+стек, что обработал бы настоящий HTTP-запрос — без поднятия реального сокета.
 """
 
-import json
-import threading
 from datetime import date
-from http.server import ThreadingHTTPServer
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 import pytest
+from fastapi.testclient import TestClient
 
-from server import Handler
+from server import app
 
 
 @pytest.fixture()
-def base_url():
-    # Порт 0 — ОС сама выдаёт свободный, тесты не конфликтуют между собой.
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    port = httpd.server_address[1]
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join(timeout=5)
-
-
-def _post(url, body):
-    data = json.dumps(body).encode("utf-8")
-    req = Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        with urlopen(req) as resp:
-            return resp.status, json.loads(resp.read())
-    except HTTPError as e:
-        return e.code, json.loads(e.read())
-
-
-def _get(url):
-    try:
-        with urlopen(url) as resp:
-            return resp.status, json.loads(resp.read())
-    except HTTPError as e:
-        return e.code, json.loads(e.read())
+def client():
+    return TestClient(app)
 
 
 def _adult_payload():
@@ -60,57 +28,65 @@ def _adult_payload():
     }
 
 
-def test_health(base_url):
-    status, body = _get(f"{base_url}/health")
-    assert status == 200
-    assert body == {"status": "ok"}
+def test_health(client):
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
 
 
-def test_root_help(base_url):
-    status, body = _get(f"{base_url}/")
-    assert status == 200
-    assert body["service"] == "PetBank"
+def test_root_help(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert resp.json()["service"] == "PetBank"
 
 
-def test_application_approved(base_url):
-    status, body = _post(f"{base_url}/applications", _adult_payload())
-    assert status == 200
+def test_application_approved(client):
+    resp = client.post("/applications", json=_adult_payload())
+    assert resp.status_code == 200
+    body = resp.json()
     assert body["status"] == "approved"
     assert body["applicant"]["age"] == 30
     assert body["reasons"] == []
 
 
-def test_application_declined_minor(base_url):
+def test_application_declined_minor(client):
     payload = _adult_payload()
     payload["birth_date"] = date.today().replace(year=date.today().year - 10).isoformat()
-    status, body = _post(f"{base_url}/applications", payload)
-    assert status == 200
+    resp = client.post("/applications", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
     assert body["status"] == "declined"
     assert body["reasons"]
 
 
-def test_application_validation_error(base_url):
-    status, body = _post(f"{base_url}/applications", {"first_name": "Иван"})
-    assert status == 400
+def test_application_declined_blocked_country(client):
+    payload = _adult_payload()
+    payload["country"] = "Китай"
+    resp = client.post("/applications", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "declined"
+    assert any("Китай" in reason for reason in body["reasons"])
+
+
+def test_application_validation_error(client):
+    resp = client.post("/applications", json={"first_name": "Иван"})
+    assert resp.status_code == 400
+    body = resp.json()
     assert body["error"] == "validation_error"
     assert body["details"]
 
 
-def test_application_invalid_json(base_url):
-    req = Request(
-        f"{base_url}/applications",
-        data=b"{not json",
+def test_application_invalid_json(client):
+    resp = client.post(
+        "/applications",
+        content=b"{not json",
         headers={"Content-Type": "application/json"},
-        method="POST",
     )
-    try:
-        with urlopen(req) as resp:
-            status = resp.status
-    except HTTPError as e:
-        status = e.code
-    assert status == 400
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "bad_request"
 
 
-def test_unknown_path_404(base_url):
-    status, _ = _get(f"{base_url}/nope")
-    assert status == 404
+def test_unknown_path_404(client):
+    resp = client.get("/nope")
+    assert resp.status_code == 404
