@@ -59,4 +59,4 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
             "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
-            'sudo systemctl restart petbank && sleep 1 && systemctl is-active petbank && curl -fsS http://127.0.0.1:8000/health'
+            'sudo systemctl restart petbank && systemctl is-active --wait petbank && curl -fsS http://127.0.0.1:8000/health'
