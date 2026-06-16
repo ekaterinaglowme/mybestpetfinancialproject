@@ -9,6 +9,7 @@
     GET  /docs          — Swagger UI (интерактивная документация)
 """
 
+import logging
 import os
 import sys
 import uuid
@@ -17,6 +18,13 @@ from datetime import date, datetime
 import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, field_validator
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 # --- Бизнес-правила --------------------------------------------------------
 
@@ -120,22 +128,36 @@ def make_decision(payload: ApplicationRequest) -> dict:
     """Принимает решение по провалидированной заявке."""
     today = date.today()
     age = calculate_age(payload.birth_date, today)
+    application_id = str(uuid.uuid4())
+
+    logger.info(
+        "Заявка %s: %s %s, возраст %d, страна %s",
+        application_id, payload.last_name, payload.first_name, age, payload.country,
+    )
 
     reasons = []
     if age < MIN_AGE:
-        reasons.append(f"Возраст заявителя {age} лет — меньше минимально допустимого {MIN_AGE}")
+        reason = f"Возраст заявителя {age} лет — меньше минимально допустимого {MIN_AGE}"
+        reasons.append(reason)
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
     if age > MAX_AGE:
-        reasons.append(f"Возраст заявителя {age} лет — больше макс допустимого {MAX_AGE}")
+        reason = f"Возраст заявителя {age} лет — больше макс допустимого {MAX_AGE}"
+        reasons.append(reason)
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
     if payload.country.lower() in BLOCKED_COUNTRIES:
-        reasons.append(f"Заявки из страны «{payload.country}» не принимаются")
+        reason = f"Заявки из страны «{payload.country}» не принимаются"
+        reasons.append(reason)
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
 
     status = "approved" if not reasons else "declined"
+    logger.info("Заявка %s — итог: %s", application_id, status.upper())
+
     full_name = " ".join(
         part for part in (payload.last_name, payload.first_name, payload.middle_name) if part
     )
 
     return {
-        "application_id": str(uuid.uuid4()),
+        "application_id": application_id,
         "status": status,
         "applicant": {
             "full_name": full_name,
