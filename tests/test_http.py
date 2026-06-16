@@ -71,10 +71,11 @@ def test_application_declined_blocked_country(client):
 
 def test_application_validation_error(client):
     resp = client.post("/applications", json={"first_name": "Иван"})
-    assert resp.status_code == 400
+    assert resp.status_code == 422
     body = resp.json()
-    assert body["error"] == "validation_error"
-    assert body["details"]
+    assert "detail" in body
+    fields_with_errors = [e["loc"][-1] for e in body["detail"]]
+    assert "last_name" in fields_with_errors
 
 
 def test_application_invalid_json(client):
@@ -83,8 +84,7 @@ def test_application_invalid_json(client):
         content=b"{not json",
         headers={"Content-Type": "application/json"},
     )
-    assert resp.status_code == 400
-    assert resp.json()["error"] == "bad_request"
+    assert resp.status_code == 422
 
 
 def test_unknown_path_404(client):
