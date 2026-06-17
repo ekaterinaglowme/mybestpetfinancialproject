@@ -1,22 +1,22 @@
 [Unit]
-Description=PetBank application intake server
-After=network.target
+Description=PetBank (Docker-контейнер)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=deploy
 Group=deploy
-WorkingDirectory=/opt/petbank
-ExecStart=/opt/petbank/.venv/bin/python /opt/petbank/server.py
-Environment=PORT=8000
-Restart=on-failure
-RestartSec=2
+Restart=always
+RestartSec=5
 
-# Базовый hardening: сервису ничего лишнего на коробке не нужно.
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ProtectHome=true
+# Свежий образ тянет CI-деплой (docker pull). Здесь — только запуск уже
+# закешированного :latest, поэтому юзер deploy должен быть в группе docker.
+# Перед стартом убираем прошлый контейнер (если остался после падения/ребута).
+ExecStartPre=-/usr/bin/docker rm -f petbank
+ExecStart=/usr/bin/docker run --name petbank -p 8000:8000 ghcr.io/ekaterinaglowme/mybestpetfinancialproject:latest
+ExecStop=/usr/bin/docker stop petbank
 
 [Install]
 WantedBy=multi-user.target

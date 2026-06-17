@@ -2,53 +2,47 @@
 
 CI/CD на GitHub Actions (`.github/workflows/ci.yml`):
 
-- **PR в `main`** → гоняются тесты (`pytest`). Деплоя нет.
-- **push/мёрж в `main`** → тесты, затем деплой на виртуалку (только если тесты зелёные).
+- **PR в `main`** → тесты (`pytest`) + сборка Docker-образа (без публикации). Деплоя нет.
+- **push/мёрж в `main`** → тесты → сборка и публикация образа в ghcr → деплой на VM
+  (каждый следующий шаг только если предыдущий зелёный).
 
-Деплой = `rsync` кода в `/opt/petbank` на сервере + `systemctl restart petbank`.
-Сервис — обычный systemd-юнит, работает под непривилегированным юзером `deploy`,
-слушает `:8000`. Никакого Docker на проде: зависимости (FastAPI/Uvicorn)
-ставятся в venv `/opt/petbank/.venv`, системный Python не трогаем.
+Деплой = на VM подтягивается свежий образ из GitHub Container Registry и
+перезапускается systemd-сервис `petbank`, который этот образ запускает контейнером.
+Сервис слушает `:8000`. На проде теперь **Docker**, а не venv: на VM нужен только
+установленный Docker — код и зависимости (FastAPI/Uvicorn) приезжают внутри образа.
 
-## ⚠️ Перед мёржем в main (переход на FastAPI)
+Образ: `ghcr.io/ekaterinaglowme/mybestpetfinancialproject:latest`
+(приватный, привязан к репозиторию).
 
-Сервис теперь требует `fastapi`/`uvicorn` (см. `requirements.txt`). CI
-деплоит автоматически при мёрже в `main` и сразу перезапускает сервис —
-если на VM ещё нет venv с этими зависимостями, `systemctl restart petbank`
-упадёт с `ModuleNotFoundError`, health-check в CI станет красным, прод
-будет недоступен.
+## ⚠️ Перед мёржем в main (переход на Docker)
 
-Все шаги ниже нужно выполнить **до** мёржа — после мёржа CI рестартует
-сервис автоматически и без паузы для ручного вмешательства.
+После мёржа CI сам делает `docker pull` + `systemctl restart petbank`. Если VM ещё
+не подготовлена под Docker, рестарт упадёт и health-check в CI станет красным.
 
 **До мёржа вручную на VM:**
-1. Сначала засинхронизировать код этой ветки на VM (разово, любым способом,
-   например `rsync`/`scp`), чтобы на сервере появился файл
-   `/opt/petbank/requirements.txt` — без него следующий шаг не выполнится.
-2. Затем создать venv и поставить зависимости:
-   `python3 -m venv /opt/petbank/.venv && /opt/petbank/.venv/bin/pip install -r /opt/petbank/requirements.txt`.
-   (Те же команды используются ниже в «Подготовка сервера» для свежей VM —
-   здесь это разовая миграция уже существующего сервера.)
-3. Обновить `/etc/systemd/system/petbank.service` (новый `ExecStart`, см.
-   ниже) и выполнить `systemctl daemon-reload`.
+1. Установить Docker Engine (если его нет): `curl -fsSL https://get.docker.com | sh`.
+2. Добавить пользователя `deploy` в группу `docker` (чтобы пуллить/запускать без sudo):
+   `usermod -aG docker deploy`, затем новый SSH-сеанс, чтобы группа применилась.
+3. Заменить unit-файл на новый (он запускает контейнер, см. `petbank.service`):
+   `cp deploy/petbank.service /etc/systemd/system/petbank.service && systemctl daemon-reload`.
+4. `systemctl restart petbank` подхватит новый unit — процесс uvicorn из venv
+   заменится контейнером. venv `/opt/petbank/.venv` больше не нужен.
 
-**Если мёрж всё же случился раньше:** сервис упадёт в `failed` после
-рестарта. Зайти на VM по SSH, выполнить шаги 1-3 выше, затем
-`systemctl restart petbank` — после этого CI-деплои снова будут
-проходить нормально (venv и unit-файл останутся на месте).
+**Если мёрж случился раньше:** сервис уйдёт в `failed`. Зайти по SSH, выполнить
+шаги 1-3, затем `systemctl restart petbank` — дальше CI-деплои пойдут нормально.
 
-## Что нужно в GitHub Secrets
+## Что нужно в GitHub Secrets / Variables
 
 Выставляет владелец репозитория (Settings → Secrets and variables → Actions):
 
-| Secret      | Значение                                  |
-|-------------|-------------------------------------------|
-| `SSH_HOST`  | IP виртуалки (`212.147.238.3`)            |
-| `SSH_USER`  | `deploy`                                   |
-| `SSH_KEY`   | приватный deploy-ключ (ed25519, целиком)  |
+| Имя         | Где      | Значение                                  |
+|-------------|----------|-------------------------------------------|
+| `SSH_HOST`  | Variable | IP виртуалки (`212.147.238.3`)            |
+| `SSH_USER`  | Variable | `deploy`                                   |
+| `SSH_KEY`   | Secret   | приватный deploy-ключ (ed25519, целиком)  |
 
-Публичный ключ этой пары лежит в `~deploy/.ssh/authorized_keys` на сервере.
-Ключ — отдельный, только под деплой; личные ключи в Secrets не кладём.
+Для входа в ghcr отдельный токен не нужен — CI использует встроенный `GITHUB_TOKEN`
+(в workflow выданы права `packages: write` на сборку и `packages: read` на деплой).
 
 ## Подготовка сервера (один раз)
 
@@ -59,10 +53,12 @@ install -d -m 700 -o deploy -g deploy ~deploy/.ssh
 echo "<публичный deploy-ключ>" >> ~deploy/.ssh/authorized_keys
 chown deploy:deploy ~deploy/.ssh/authorized_keys && chmod 600 ~deploy/.ssh/authorized_keys
 
-# каталог приложения
-install -d -o deploy -g deploy /opt/petbank
+# Docker Engine + deploy в группу docker
+curl -fsSL https://get.docker.com | sh
+usermod -aG docker deploy
+systemctl enable --now docker
 
-# systemd-юнит и узкий sudo
+# systemd-юнит (запускает контейнер) и узкий sudo на управление сервисом
 cp deploy/petbank.service        /etc/systemd/system/petbank.service
 cp deploy/petbank-deploy.sudoers /etc/sudoers.d/petbank-deploy
 chmod 440 /etc/sudoers.d/petbank-deploy
@@ -70,29 +66,25 @@ visudo -c
 systemctl daemon-reload
 systemctl enable petbank
 
-# rsync для деплоя, venv-модуль + фаервол
-apt-get update && apt-get install -y rsync python3-venv
+# фаервол
 ufw allow OpenSSH
 ufw allow 8000/tcp
 ufw --force enable
 ```
 
-После первого `rsync` кода в `/opt/petbank` — создать venv и поставить
-зависимости:
+Первый запуск: образа ещё нет на сервере — либо дождаться первого деплоя из `main`,
+либо разово стянуть вручную:
 
 ```bash
-python3 -m venv /opt/petbank/.venv
-/opt/petbank/.venv/bin/pip install -r /opt/petbank/requirements.txt
+# под пользователем deploy (он в группе docker)
+docker login ghcr.io           # аккаунт с доступом к приватному пакету
+docker pull ghcr.io/ekaterinaglowme/mybestpetfinancialproject:latest
+sudo systemctl start petbank
+curl http://127.0.0.1:8000/health
 ```
 
-Затем поднять сервис: `systemctl start petbank` и проверить
-`curl http://127.0.0.1:8000/health`.
-
-После этого первого раза `requirements.txt` обновляется автоматически
-обычным `rsync` при каждом деплое — venv пересоздавать не нужно, но при
-добавлении/обновлении зависимостей нужно вручную повторить
-`/opt/petbank/.venv/bin/pip install -r /opt/petbank/requirements.txt`
-на VM (CI это не делает).
+Дальше каждый деплой из `main` сам делает `docker pull` свежего `:latest` и
+`systemctl restart petbank` — ручное вмешательство не нужно.
 
 ## Рекомендации (не блокеры)
 
@@ -100,3 +92,5 @@ python3 -m venv /opt/petbank/.venv
   на `0.0.0.0:8000`. Для учебного стенда ок; в проде — reverse-proxy (nginx) + TLS.
 - Branch protection на `main`: «Require status checks to pass → Tests» — чтобы PR
   нельзя было смёржить с красными тестами.
+- Образ в ghcr приватный. Сделать публичным (тогда `docker login` на VM не нужен) —
+  в репозитории: Packages → пакет → Package settings → Change visibility.
