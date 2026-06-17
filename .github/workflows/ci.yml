@@ -28,15 +28,59 @@ jobs:
       - name: Run pytest
         run: pytest -q
 
-  deploy:
-    name: Deploy to VM
+  docker:
+    name: Build Docker image
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    concurrency: deploy-production   # два деплоя одновременно не пойдут
+    permissions:
+      contents: read
+      packages: write          # нужно, чтобы пушить образ в ghcr.io
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Логин в реестр нужен только когда реально пушим (push в main); на PR — нет.
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata — теги и labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+
+      # На PR — только сборка (проверка, что Dockerfile собирается).
+      # На push в main — сборка и публикация образа в ghcr.io.
+      - name: Build (push только в main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to VM
+    needs: [test, docker]            # нужен и собранный/запушенный образ
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read                 # GITHUB_TOKEN сможет спуллить приватный образ из ghcr
+    concurrency: deploy-production   # два деплоя одновременно не пойдут
+    steps:
       - name: Set up SSH
         run: |
           install -m 700 -d ~/.ssh
@@ -44,20 +88,20 @@ jobs:
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Rsync code to /opt/petbank
-        run: |
-          rsync -az --delete \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='tests' \
-            --exclude='deploy' \
-            --exclude='__pycache__' \
-            --exclude='.venv' \
-            -e "ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes" \
-            ./ "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/petbank/"
-
-      - name: Restart service and verify
+      # На VM: логин в ghcr через эфемерный GITHUB_TOKEN, pull свежего :latest,
+      # рестарт systemd-сервиса (он запускает контейнер) и проверка /health.
+      # Если pull упадёт — рестарта не будет, старый контейнер продолжит работать.
+      - name: Pull image on VM and restart service
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:latest
         run: |
           ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
             "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
-            '{ test -x /opt/petbank/.venv/bin/python || python3 -m venv /opt/petbank/.venv; } && /opt/petbank/.venv/bin/pip install -q -r /opt/petbank/requirements.txt && sudo systemctl restart petbank && systemctl is-active --wait petbank && sleep 10 && curl -fsS http://127.0.0.1:8000/health'
+            "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin \
+             && docker pull '${IMAGE}' \
+             && sudo systemctl restart petbank \
+             && sleep 10 \
+             && systemctl is-active --quiet petbank \
+             && curl -fsS http://127.0.0.1:8000/health \
+             && docker image prune -f \
+             && docker logout ghcr.io"
