@@ -1,3 +1,0 @@
-# Ставится в /etc/sudoers.d/petbank-deploy (chmod 440).
-# Пользователь deploy может управлять ТОЛЬКО сервисом petbank и ничем больше.
-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart petbank, /usr/bin/systemctl start petbank, /usr/bin/systemctl stop petbank, /usr/bin/systemctl status petbank
