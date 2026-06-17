@@ -88,10 +88,11 @@ jobs:
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      # На VM: логин в ghcr через эфемерный GITHUB_TOKEN, pull свежего :latest,
-      # рестарт systemd-сервиса (он запускает контейнер) и проверка /health.
-      # Если pull упадёт — рестарта не будет, старый контейнер продолжит работать.
-      - name: Pull image on VM and restart service
+      # На VM: логин в ghcr (эфемерный GITHUB_TOKEN) → pull свежего :latest →
+      # пересоздание контейнера через docker run. Флаг --restart unless-stopped:
+      # Docker сам поднимет контейнер после ребута/падения — systemd не нужен.
+      # Если pull упадёт — старый контейнер не трогаем, он продолжит работать.
+      - name: Pull image on VM and (re)start container
         env:
           IMAGE: ghcr.io/${{ github.repository }}:latest
         run: |
@@ -99,9 +100,9 @@ jobs:
             "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
             "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin \
              && docker pull '${IMAGE}' \
-             && sudo systemctl restart petbank \
+             && { docker rm -f petbank 2>/dev/null || true; } \
+             && docker run -d --restart unless-stopped --name petbank -p 8000:8000 '${IMAGE}' \
              && sleep 10 \
-             && systemctl is-active --quiet petbank \
              && curl -fsS http://127.0.0.1:8000/health \
              && docker image prune -f \
              && docker logout ghcr.io"
