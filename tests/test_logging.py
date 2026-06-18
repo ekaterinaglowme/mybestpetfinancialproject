@@ -2,8 +2,29 @@
 
 import json
 import logging
+from datetime import date
+
+import pytest
+from fastapi.testclient import TestClient
 
 from logging_setup import JsonFormatter
+from server import app
+
+
+@pytest.fixture()
+def client():
+    return TestClient(app)
+
+
+def _adult_payload():
+    born = date.today().replace(year=date.today().year - 30)
+    return {
+        "last_name": "Иванов",
+        "first_name": "Иван",
+        "phone": "+79991234567",
+        "country": "Россия",
+        "birth_date": born.isoformat(),
+    }
 
 
 def _record(name="server", level=logging.INFO, msg="сообщение", **extra):
@@ -38,3 +59,11 @@ def test_formatter_includes_extra_fields():
 def test_formatter_includes_request_id_when_set():
     data = json.loads(JsonFormatter().format(_record(request_id="abc123")))
     assert data["request_id"] == "abc123"
+
+
+def test_decision_log_has_structured_fields(client, caplog):
+    with caplog.at_level(logging.INFO, logger="server"):
+        client.post("/applications", json=_adult_payload())
+    finals = [r for r in caplog.records if getattr(r, "status", None) == "approved"]
+    assert finals, "ожидали итоговый лог решения со status=approved"
+    assert all(getattr(r, "application_id", None) for r in finals)

@@ -9,22 +9,26 @@
     GET  /docs          — Swagger UI (интерактивная документация)
 """
 
+import json
 import logging
 import os
 import sys
+import time
 import uuid
 from datetime import date, datetime
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from logging_setup import request_id_ctx, setup_logging
+
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+access_logger = logging.getLogger("petbank.access")
+
+# Настраиваем JSON-логирование при импорте — чтобы оно работало и под тестами,
+# которые импортируют app напрямую, не вызывая run().
+setup_logging()
 
 # --- Бизнес-правила --------------------------------------------------------
 
@@ -150,7 +154,10 @@ def make_decision(payload: ApplicationRequest) -> dict:
         logger.info("Заявка %s — отказ: %s", application_id, reason)
 
     status = "approved" if not reasons else "declined"
-    logger.info("Заявка %s — итог: %s", application_id, status.upper())
+    logger.info(
+        "Заявка %s — итог: %s", application_id, status.upper(),
+        extra={"application_id": application_id, "status": status},
+    )
 
     full_name = " ".join(
         part for part in (payload.last_name, payload.first_name, payload.middle_name) if part
@@ -201,7 +208,8 @@ def run(host="0.0.0.0", port=None):
         f"Правило одобрения: возраст {MIN_AGE}-{MAX_AGE} лет, "
         f"страна не в стоп-листе ({', '.join(sorted(BLOCKED_COUNTRIES))})"
     )
-    uvicorn.run(app, host=host, port=port)
+    setup_logging()
+    uvicorn.run(app, host=host, port=port, log_config=None, access_log=False)
 
 
 if __name__ == "__main__":
