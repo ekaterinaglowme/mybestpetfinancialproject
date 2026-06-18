@@ -181,6 +181,58 @@ def make_decision(payload: ApplicationRequest) -> dict:
 app = FastAPI(title="PetBank")
 
 
+# Максимум байт тела запроса, попадающих в лог (защита от распухания логов).
+MAX_BODY_BYTES = 10240
+
+
+def _body_for_log(body_bytes: bytes) -> dict:
+    """Готовит поле body для лога: JSON, иначе сырой текст; пусто → {}."""
+    if not body_bytes:
+        return {}
+    chunk = body_bytes[:MAX_BODY_BYTES]
+    try:
+        return {"body": json.loads(chunk)}
+    except (ValueError, UnicodeDecodeError):
+        return {"body": chunk.decode("utf-8", errors="replace")}
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    token = request_id_ctx.set(request_id)
+    try:
+        body_bytes = await request.body()
+        start = time.perf_counter()
+        status_code = 500
+        exc: Exception | None = None
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+        except Exception as error:  # noqa: BLE001 — логируем и пробрасываем
+            exc = error
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
+        access_logger.info(
+            "%s %s %s", request.method, request.url.path, status_code,
+            extra={
+                "event": "http_request",
+                "method": request.method,
+                "path": request.url.path,
+                "query": request.url.query,
+                "status_code": status_code,
+                "duration_ms": duration_ms,
+                "client_ip": request.client.host if request.client else None,
+                **_body_for_log(body_bytes),
+            },
+            exc_info=exc,
+        )
+        if exc is not None:
+            raise exc
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        request_id_ctx.reset(token)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
