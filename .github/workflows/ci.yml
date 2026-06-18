@@ -101,7 +101,7 @@ jobs:
             "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin \
              && docker pull '${IMAGE}' \
              && { docker rm -f petbank 2>/dev/null || true; } \
-             && docker run -d --restart unless-stopped --name petbank -p 8000:8000 '${IMAGE}' \
+             && docker run -d --restart unless-stopped --name petbank --memory=512m --cpus=0.5 -p 8000:8000 '${IMAGE}' \
              && sleep 10 \
              && curl -fsS http://127.0.0.1:8000/health \
              && docker image prune -f \
