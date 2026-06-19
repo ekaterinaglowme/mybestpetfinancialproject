@@ -19,9 +19,11 @@ from datetime import date, datetime
 
 import uvicorn
 from fastapi import FastAPI, Request
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from logging_setup import request_id_ctx, setup_logging
+from metrics import APPLICATION_AMOUNT_RUB, DECISIONS, REJECTION_REASONS
 
 logger = logging.getLogger(__name__)
 access_logger = logging.getLogger("petbank.access")
@@ -143,17 +145,23 @@ def make_decision(payload: ApplicationRequest) -> dict:
     if age < MIN_AGE:
         reason = f"Возраст заявителя {age} лет — меньше минимально допустимого {MIN_AGE}"
         reasons.append(reason)
+        REJECTION_REASONS.labels(reason="age_below_min").inc()
         logger.info("Заявка %s — отказ: %s", application_id, reason)
     if age > MAX_AGE:
         reason = f"Возраст заявителя {age} лет — больше макс допустимого {MAX_AGE}"
         reasons.append(reason)
+        REJECTION_REASONS.labels(reason="age_above_max").inc()
         logger.info("Заявка %s — отказ: %s", application_id, reason)
     if payload.country.lower() in BLOCKED_COUNTRIES:
         reason = f"Заявки из страны «{payload.country}» не принимаются"
         reasons.append(reason)
+        REJECTION_REASONS.labels(reason="blocked_country").inc()
         logger.info("Заявка %s — отказ: %s", application_id, reason)
 
     status = "approved" if not reasons else "declined"
+    DECISIONS.labels(status=status, country=payload.country.strip().lower()).inc()
+    if payload.amount is not None:
+        APPLICATION_AMOUNT_RUB.observe(payload.amount)
     logger.info(
         "Заявка %s — итог: %s", application_id, status.upper(),
         extra={"application_id": application_id, "status": status},
@@ -179,6 +187,10 @@ def make_decision(payload: ApplicationRequest) -> dict:
 # --- HTTP-слой -------------------------------------------------------------
 
 app = FastAPI(title="PetBank")
+
+# Prometheus-метрики: instrumentator сам поднимает GET /metrics и считает
+# HTTP-метрики (rate / errors / latency по ручкам).
+Instrumentator().instrument(app).expose(app)
 
 
 # Максимум байт тела запроса, попадающих в лог (защита от распухания логов).
