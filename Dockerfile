@@ -13,8 +13,9 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Затем код приложения (вся логика в server.py, main.py — точка входа).
-COPY server.py main.py ./
+# Затем код приложения. Бизнес-логика в server.py, настройка JSON-логов —
+# в logging_setup.py, main.py — точка входа.
+COPY server.py main.py logging_setup.py ./
 
 # Запуск под непривилегированным пользователем, а не root.
 RUN useradd --create-home --uid 1000 appuser
