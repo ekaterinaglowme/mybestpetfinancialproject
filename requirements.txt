@@ -1,2 +1,6 @@
 fastapi>=0.110,<1
 uvicorn>=0.29,<1
+# Prometheus-метрики: instrumentator поднимает /metrics и считает HTTP-метрики;
+# prometheus-client — для кастомных бизнес-метрик (Counter/Histogram с лейблами).
+prometheus-fastapi-instrumentator>=6,<8
+prometheus-client>=0.19,<1

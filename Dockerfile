@@ -13,8 +13,14 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Затем код приложения (вся логика в server.py, main.py — точка входа).
-COPY server.py main.py ./
+# Затем код приложения. Бизнес-логика в server.py, метрики — в metrics.py,
+# JSON-логи — в logging_setup.py, main.py — точка входа.
+COPY server.py main.py metrics.py logging_setup.py ./
+
+# Версия/коммит приложения для метрики petbank_app_info. Прокидывается из CI
+# build-arg GIT_COMMIT (github.sha); локально по умолчанию "unknown".
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
 
 # Запуск под непривилегированным пользователем, а не root.
 RUN useradd --create-home --uid 1000 appuser
