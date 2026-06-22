@@ -1,36 +1,46 @@
-# Окружение и кеши
-.venv
-venv
-env
-ENV
-__pycache__
-*.py[cod]
-*.so
-.pytest_cache
-.mypy_cache
+# Что НЕ попадает в образ. Всё остальное (код, конфиги, openapi.yaml, контракты,
+# метрики, логи-конфиги, доки) едет в образ автоматически — через `COPY . .` в Dockerfile.
+
+# Секреты — никогда в образ
+.env
+.env.*
 
 # VCS и CI
 .git
 .gitignore
 .github
 
-# IDE
+# Python-кеши и артефакты сборки
+__pycache__
+*.py[cod]
+*.so
+.pytest_cache
+.mypy_cache
+
+# Виртуальные окружения
+.venv
+venv
+env
+ENV
+
+# IDE / агент / ОС
 .idea
 .vscode
-
-# Секреты — никогда не попадают в образ
-.env
-.env.*
-!.env.example
-
-# Не нужно для рантайма
-tests
-docs
-deploy
-*.md
-docker-compose.yml
-openapi.yaml
-requests.http
-requirements-dev.txt
-app.log
+.claude
 .DS_Store
+
+# Только для разработки/деплоя — в рантайме не нужны
+tests
+requirements-dev.txt
+requests.http
+docker-compose.yml
+deploy
+
+# Сам docker-обвес незачем класть внутрь образа
+Dockerfile
+.dockerignore
+
+# Локальные рантайм-данные — не в образ (логи идут в stdout, БД — в volume)
+*.log
+*.db
+*.sqlite3

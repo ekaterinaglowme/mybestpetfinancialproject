@@ -13,8 +13,9 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Затем код приложения (вся логика в server.py, main.py — точка входа).
-COPY server.py main.py ./
+# Затем всё остальное из контекста сборки. Что НЕ копировать — решает .dockerignore,
+# поэтому новые модули/конфиги/контракты (например logging_setup.py) попадают в образ сами.
+COPY . .
 
 # Запуск под непривилегированным пользователем, а не root.
 RUN useradd --create-home --uid 1000 appuser
