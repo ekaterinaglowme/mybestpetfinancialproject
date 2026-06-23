@@ -90,3 +90,78 @@ def test_application_invalid_json(client):
 def test_unknown_path_404(client):
     resp = client.get("/nope")
     assert resp.status_code == 404
+
+
+# --- Учёт займов: выдача, статус, возврат ----------------------------------
+
+@pytest.fixture(autouse=True)
+def _clean_loans():
+    import loans
+    loans.reset()
+    yield
+    loans.reset()
+
+
+def _issue_loan(client, amount=100000):
+    """Подаёт одобряемую заявку с суммой; возвращает loan_id (= application_id)."""
+    payload = _adult_payload()
+    payload["amount"] = amount
+    resp = client.post("/applications", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+    return resp.json()["application_id"]
+
+
+def test_loan_created_on_approval_with_amount(client):
+    loan_id = _issue_loan(client, amount=100000)
+    resp = client.get(f"/loans/{loan_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "не отдал"
+    assert body["amount"] == 100000
+    assert body["days_elapsed"] == 0          # выдан сегодня
+    assert body["current_rate"] == 0.10       # порог 0–7 дней
+    assert body["amount_owed"] == 110000.0
+    assert body["repaid_at"] is None
+
+
+def test_no_loan_when_approved_without_amount(client):
+    resp = client.post("/applications", json=_adult_payload())  # без amount
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+    loan_id = resp.json()["application_id"]
+    assert client.get(f"/loans/{loan_id}").status_code == 404
+
+
+def test_no_loan_for_declined(client):
+    payload = _adult_payload()
+    payload["country"] = "Китай"
+    payload["amount"] = 100000
+    resp = client.post("/applications", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "declined"
+    loan_id = resp.json()["application_id"]
+    assert client.get(f"/loans/{loan_id}").status_code == 404
+
+
+def test_get_unknown_loan_404(client):
+    assert client.get("/loans/nonexistent").status_code == 404
+
+
+def test_repay_marks_repaid(client):
+    loan_id = _issue_loan(client)
+    resp = client.post(f"/loans/{loan_id}/repay")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "отдал"
+    assert resp.json()["repaid_at"] is not None
+    assert client.get(f"/loans/{loan_id}").json()["status"] == "отдал"
+
+
+def test_repay_twice_conflict(client):
+    loan_id = _issue_loan(client)
+    assert client.post(f"/loans/{loan_id}/repay").status_code == 200
+    assert client.post(f"/loans/{loan_id}/repay").status_code == 409
+
+
+def test_repay_unknown_loan_404(client):
+    assert client.post("/loans/nonexistent/repay").status_code == 404

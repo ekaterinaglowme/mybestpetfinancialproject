@@ -49,3 +49,23 @@ Content-Type: application/json
   "phone": "+79993334455",
   "country": "Россия"
 }
+
+### Выдача займа — одобряем заявку С суммой (запоминается для учёта возврата)
+# @name issue_loan
+POST http://localhost:8000/applications
+Content-Type: application/json
+
+{
+  "last_name": "Заёмщиков",
+  "first_name": "Заём",
+  "phone": "+79990000000",
+  "birth_date": "2000-05-15",
+  "country": "Россия",
+  "amount": 100000
+}
+
+### Статус займа — отдал/не отдал + текущий долг (id из ответа выше)
+GET http://localhost:8000/loans/{{issue_loan.response.body.$.application_id}}
+
+### Отметить возврат займа (повторный вызов вернёт 409 «уже отдан»)
+POST http://localhost:8000/loans/{{issue_loan.response.body.$.application_id}}/repay

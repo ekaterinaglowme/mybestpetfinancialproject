@@ -3,10 +3,12 @@
 Запуск:  python server.py   (или  python server.py 8080  — другой порт)
 
 Эндпоинты:
-    POST /applications  — подать заявку, вернёт решение approved / declined
-    GET  /health        — проверка, что сервер жив
-    GET  /              — короткая справка
-    GET  /docs          — Swagger UI (интерактивная документация)
+    POST /applications      — подать заявку, вернёт решение approved / declined
+    GET  /loans/{id}        — статус займа: отдал/не отдал + текущий долг
+    POST /loans/{id}/repay  — отметить, что заём возвращён
+    GET  /health            — проверка, что сервер жив
+    GET  /                  — короткая справка
+    GET  /docs              — Swagger UI (интерактивная документация)
 """
 
 import json
@@ -18,10 +20,11 @@ import uuid
 from datetime import date, datetime
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, ConfigDict, field_validator
 
+import loans
 from logging_setup import request_id_ctx, setup_logging
 from metrics import APPLICATION_AMOUNT_RUB, DECISIONS, REJECTION_REASONS
 
@@ -117,6 +120,17 @@ class ApplicationDecision(BaseModel):
     applicant: ApplicantInfo
     reasons: list[str]
     received_at: str
+
+
+class LoanStatus(BaseModel):
+    loan_id: str
+    amount: float
+    issued_at: date
+    status: str               # «отдал» / «не отдал»
+    days_elapsed: int
+    current_rate: float
+    amount_owed: float
+    repaid_at: date | None = None
 
 
 # --- Бизнес-логика ---------------------------------------------------------
@@ -254,14 +268,40 @@ def health():
 def root():
     return {
         "service": "PetBank",
-        "endpoints": ["POST /applications", "GET /health", "GET /docs"],
+        "endpoints": [
+            "POST /applications", "GET /loans/{id}", "POST /loans/{id}/repay",
+            "GET /health", "GET /docs",
+        ],
         "rule": f"возраст {MIN_AGE}-{MAX_AGE}, страна не в стоп-листе",
     }
 
 
 @app.post("/applications", response_model=ApplicationDecision)
 async def create_application(payload: ApplicationRequest):
-    return make_decision(payload)
+    decision = make_decision(payload)
+    # Одобрение с суммой = выдача займа: фиксируем для учёта возврата.
+    if decision["status"] == "approved" and payload.amount:
+        loans.create_loan(decision["application_id"], payload.amount, date.today())
+    return decision
+
+
+@app.get("/loans/{loan_id}", response_model=LoanStatus)
+def get_loan_status(loan_id: str):
+    loan = loans.get_loan(loan_id)
+    if loan is None:
+        raise HTTPException(status_code=404, detail="Заём не найден")
+    return loans.loan_view(loan, date.today())
+
+
+@app.post("/loans/{loan_id}/repay", response_model=LoanStatus)
+def repay_loan(loan_id: str):
+    try:
+        loan = loans.mark_repaid(loan_id, date.today())
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Заём не найден")
+    except loans.AlreadyRepaid:
+        raise HTTPException(status_code=409, detail="Заём уже отдан")
+    return loans.loan_view(loan, date.today())
 
 
 def run(host="0.0.0.0", port=None):
