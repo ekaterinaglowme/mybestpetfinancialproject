@@ -35,7 +35,7 @@ jobs:
     needs: test
     # На PR ждём тесты: упали → образ не собираем. На push в main тестов нет
     # (needs.test.result == 'skipped'), поэтому always() позволяет собрать образ.
-    if: github.event_name == 'pull_request'   # только на PR, не на push в main
+    if: github.event_name == 'pull_request'   # запускается докер только на main
     runs-on: ubuntu-latest
     permissions:
       contents: read
