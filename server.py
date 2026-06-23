@@ -45,17 +45,21 @@ BLOCKED_COUNTRIES = {"китай"}
 # --- Pydantic-модели -------------------------------------------------------
 
 class ApplicationRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "last_name": "Иванов",
-            "first_name": "Иван",
-            "middle_name": "Иванович",
-            "phone": "+79991234567",
-            "birth_date": "2000-05-15",
-            "country": "Россия",
-            "amount": 100000,
-        }
-    })
+    model_config = ConfigDict(
+        # Неизвестные поля — ошибка валидации (422), а не молчаливое игнорирование.
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "last_name": "Иванов",
+                "first_name": "Иван",
+                "middle_name": "Иванович",
+                "phone": "+79991234567",
+                "birth_date": "2000-05-15",
+                "country": "Россия",
+                "amount": 100000,
+            }
+        },
+    )
 
     last_name: str
     first_name: str

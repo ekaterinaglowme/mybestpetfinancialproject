@@ -136,6 +136,12 @@ def test_request_amount_negative_rejected():
         _valid_request(amount=-1)
 
 
+def test_request_extra_field_rejected():
+    # Неизвестное поле должно отклоняться (extra="forbid"), а не игнорироваться.
+    with pytest.raises(Exception):
+        _valid_request(unexpected_field="garbage")
+
+
 # --- make_decision ---------------------------------------------------------
 
 def _valid_decision_request(birth_date: date, country: str = "Россия") -> ApplicationRequest:

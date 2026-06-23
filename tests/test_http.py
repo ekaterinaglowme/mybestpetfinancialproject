@@ -78,6 +78,17 @@ def test_application_validation_error(client):
     assert "last_name" in fields_with_errors
 
 
+def test_application_extra_field_rejected(client):
+    # Лишнее/неизвестное поле в теле — заявка должна отклоняться (422),
+    # а не приниматься молча. Регрессия на дырку #15.
+    payload = _adult_payload()
+    payload["is_admin"] = True
+    resp = client.post("/applications", json=payload)
+    assert resp.status_code == 422
+    body = resp.json()
+    assert any(e["loc"][-1] == "is_admin" for e in body["detail"])
+
+
 def test_application_invalid_json(client):
     resp = client.post(
         "/applications",
