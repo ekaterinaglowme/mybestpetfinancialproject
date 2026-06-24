@@ -47,3 +47,9 @@ RATE_LIMITED = Counter(
     "petbank_rate_limited_total",
     "Запросы к /applications, отклонённые rate limiter (429)",
 )
+
+# Запросы, прерванные таймаутом-предохранителем (503).
+REQUEST_TIMEOUTS = Counter(
+    "petbank_request_timeouts_total",
+    "Запросы к /applications, прерванные по таймауту (503)",
+)
