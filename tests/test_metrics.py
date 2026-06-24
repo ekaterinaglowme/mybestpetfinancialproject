@@ -81,3 +81,10 @@ def test_app_info_metric_exposes_version_and_commit(client):
     assert info_lines, "ожидали метрику petbank_app_info"
     assert "version=" in info_lines[0]
     assert "commit=" in info_lines[0]
+
+
+def test_protection_counters_exposed(client):
+    # Счётчики защиты под нагрузкой видны на /metrics (даже при нулевом значении).
+    body = client.get("/metrics").text
+    assert "petbank_rate_limited_total" in body
+    assert "petbank_request_timeouts_total" in body

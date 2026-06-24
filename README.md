@@ -102,6 +102,28 @@ Invoke-RestMethod -Uri http://localhost:8000/applications -Method Post -ContentT
 - `openapi.yaml` — контракт API, импортируется в Postman.
 - `requests.http` — готовые запросы для PyCharm.
 
+## Защита под нагрузкой и SLO
+
+`POST /applications` защищён от перегрузки (только эта ручка; `/health`,
+`/metrics`, `/`, `/docs` не лимитируются):
+
+- **Rate limiter** — глобальный token bucket. Сверх лимита → `429` +
+  `Retry-After`. Метрика `petbank_rate_limited_total`.
+- **Таймаут-предохранитель** — долгий запрос → `503`. Метрика
+  `petbank_request_timeouts_total`. Прерывает только на `await`-точках
+  (формальный предохранитель: `make_decision` синхронный и быстрый).
+
+Конфигурация (env, `0` = выключить):
+
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `RATE_LIMIT_RPS` | `100` | Пополнение токенов (RPS) |
+| `RATE_LIMIT_BURST` | `= RATE_LIMIT_RPS` | Ёмкость bucket (всплеск) |
+| `REQUEST_TIMEOUT_SECONDS` | `1.0` | Таймаут запроса |
+
+**SLO:** при нагрузке до 100 RPS p95 латентности `/applications` ≤ 200 мс.
+Наблюдается в Grafana (дашборд `petbank-business`, секция «SLO»).
+
 ## Куда расти
 
 Новые правила одобрения добавляются в функцию `make_decision` в `server.py` —
