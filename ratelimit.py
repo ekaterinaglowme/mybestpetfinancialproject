@@ -3,6 +3,9 @@
 import time
 from collections.abc import Callable
 
+from fastapi import FastAPI, Request
+from starlette.responses import JSONResponse
+
 
 class TokenBucket:
     """Token bucket: ёмкость `capacity`, пополнение `rps` токенов/с.
@@ -38,3 +41,21 @@ class TokenBucket:
         if self.tokens >= 1 or self.rps <= 0:
             return 0.0
         return (1 - self.tokens) / self.rps
+
+
+def install_rate_limiter(app: FastAPI, *, bucket: TokenBucket, counter,
+                         path: str = "/applications", method: str = "POST") -> None:
+    """Вешает на `app` middleware: лимитирует method+path, иначе 429."""
+
+    @app.middleware("http")
+    async def _rate_limit(request: Request, call_next):
+        if request.method == method and request.url.path == path:
+            if not bucket.allow():
+                counter.inc()
+                retry = max(1, round(bucket.seconds_until_token()))
+                return JSONResponse(
+                    {"detail": "rate limit exceeded"},
+                    status_code=429,
+                    headers={"Retry-After": str(retry)},
+                )
+        return await call_next(request)

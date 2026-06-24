@@ -23,7 +23,8 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from logging_setup import request_id_ctx, setup_logging
-from metrics import APPLICATION_AMOUNT_RUB, DECISIONS, REJECTION_REASONS
+from metrics import APPLICATION_AMOUNT_RUB, DECISIONS, RATE_LIMITED, REJECTION_REASONS
+from ratelimit import TokenBucket, install_rate_limiter
 
 logger = logging.getLogger(__name__)
 access_logger = logging.getLogger("petbank.access")
@@ -187,6 +188,17 @@ def make_decision(payload: ApplicationRequest) -> dict:
 # --- HTTP-слой -------------------------------------------------------------
 
 app = FastAPI(title="PetBank")
+
+# --- Защита /applications под нагрузкой (env-конфиг; 0 = выключить) ---
+_RATE_LIMIT_RPS = float(os.environ.get("RATE_LIMIT_RPS", "100"))
+_RATE_LIMIT_BURST = float(os.environ.get("RATE_LIMIT_BURST") or _RATE_LIMIT_RPS)
+
+if _RATE_LIMIT_RPS > 0:
+    install_rate_limiter(
+        app,
+        bucket=TokenBucket(_RATE_LIMIT_RPS, _RATE_LIMIT_BURST),
+        counter=RATE_LIMITED,
+    )
 
 # Prometheus-метрики: instrumentator сам поднимает GET /metrics и считает
 # HTTP-метрики (rate / errors / latency по ручкам).
