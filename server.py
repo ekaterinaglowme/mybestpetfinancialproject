@@ -24,8 +24,10 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from logging_setup import request_id_ctx, setup_logging
-from metrics import APPLICATION_AMOUNT_RUB, DECISIONS, RATE_LIMITED, REJECTION_REASONS
+from metrics import (APPLICATION_AMOUNT_RUB, DECISIONS, RATE_LIMITED,
+                     REJECTION_REASONS, REQUEST_TIMEOUTS)
 from ratelimit import TokenBucket, install_rate_limiter
+from request_timeout import install_request_timeout
 
 logger = logging.getLogger(__name__)
 access_logger = logging.getLogger("petbank.access")
@@ -211,7 +213,12 @@ app = FastAPI(title="PetBank")
 # --- Защита /applications под нагрузкой (env-конфиг; 0 = выключить) ---
 _RATE_LIMIT_RPS = float(os.environ.get("RATE_LIMIT_RPS", "100"))
 _RATE_LIMIT_BURST = float(os.environ.get("RATE_LIMIT_BURST") or _RATE_LIMIT_RPS)
+_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "1.0"))
 
+if _REQUEST_TIMEOUT_SECONDS > 0:
+    install_request_timeout(
+        app, seconds=_REQUEST_TIMEOUT_SECONDS, counter=REQUEST_TIMEOUTS,
+    )
 if _RATE_LIMIT_RPS > 0:
     install_rate_limiter(
         app,
