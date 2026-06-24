@@ -1,0 +1,183 @@
+# PetBank: защита /applications под нагрузкой + SLO
+
+Дата: 2026-06-24
+Ветка: `feat/ratelimit-timeout-slo` (от `main`)
+
+## Контекст
+
+PetBank — stateless-сервис на FastAPI (`server.py`), деплой в Docker на VM, один
+инстанс, перед ним прокси нет. Есть HTTP-метрики и бизнес-метрики на `/metrics`
+(скрейпит Prometheus, дашборды в Grafana) и JSON-логи с `request_id`.
+
+Бизнес-ручка `POST /applications` ничем не защищена от перегрузки. Нужна защита
+сервиса под нагрузкой и формализованный SLO, который видно на дашборде.
+
+## Цели
+
+1. **Rate limiter** — глобальный лимит ~100 RPS на `/applications`; сверх лимита →
+   `429`.
+2. **Таймаут-предохранитель** — на `/applications`; режет патологически долгие
+   запросы → `503`.
+3. **SLO** — целевой уровень p95 ≤ 200 мс при нагрузке до 100 RPS; меряется
+   метриками и наблюдается в Grafana (панели + алерт).
+
+## SLO (определение)
+
+- **Объект:** ручка `POST /applications`.
+- **Нагрузка:** до 100 RPS (выше — отсекает rate limiter).
+- **Цель:** p95 латентности ≤ **200 мс**.
+- **«Хороший» запрос:** ответ не `5xx` (таймаут отдаёт `503` — тоже считается
+  плохим). `429` — это защита, в бюджет ошибок SLO латентности не входит.
+- **Наблюдение:** p95-латентность, RPS, доля успеха — на дашборде `petbank-business`;
+  алерт при нарушении p95.
+
+## Вне объёма
+
+- per-IP / per-client лимитирование (выбран **глобальный** лимит).
+- Распределённое состояние лимита / Redis (один инстанс — состояние в памяти).
+- Персистентность/БД.
+- Лимит и таймаут на `/health`, `/metrics`, `/`, `/docs` (защищаем только бизнес-ручку).
+- Prometheus alerting rules на VM (нет доступа) — алерт делаем средствами Grafana.
+
+## Подход
+
+Два рукописных HTTP-middleware (в стиле существующего `log_requests`), **без новых
+зависимостей**. Новые счётчики — в существующем `metrics.py`. SLO-панели и алерт —
+правки дашборда в Grafana через API (отдельно от репозитория).
+
+## Компоненты
+
+### Новый модуль `ratelimit.py` — token bucket + middleware
+
+- **Алгоритм:** token bucket. Ёмкость = `RATE_LIMIT_BURST` (по умолч. 100),
+  пополнение `RATE_LIMIT_RPS` токенов/с (по умолч. 100). Запрос берёт 1 токен;
+  токенов нет → отказ.
+- **Без локов:** один async-процесс; проверка/списание токена — синхронные, до
+  `await call_next`, поэтому гонок за bucket нет. Источник времени
+  (`time.monotonic`) инжектируется — для детерминированных тестов.
+- **Область:** только `POST /applications`; прочие пути проходят без проверки.
+- **Ответ при отказе:** `429 Too Many Requests`, тело JSON
+  `{"detail": "rate limit exceeded"}`, заголовок `Retry-After` (секунды до
+  следующего токена, минимум 1).
+- **Выключение:** `RATE_LIMIT_RPS=0` полностью отключает лимит.
+
+Эскиз:
+```python
+class TokenBucket:
+    def __init__(self, rps, burst, now=time.monotonic):
+        self.rps, self.capacity, self._now = rps, burst, now
+        self.tokens = float(burst); self.updated = now()
+    def allow(self) -> bool:
+        t = self._now()
+        self.tokens = min(self.capacity, self.tokens + (t - self.updated) * self.rps)
+        self.updated = t
+        if self.tokens >= 1:
+            self.tokens -= 1
+            return True
+        return False
+```
+
+### Новый модуль `request_timeout.py` — middleware
+
+- Оборачивает `call_next` в `asyncio.timeout(REQUEST_TIMEOUT_SECONDS)` (по умолч.
+  **1.0 с**, > SLO).
+- Срабатывание → `503 Service Unavailable`, тело JSON `{"detail": "request timeout"}`.
+- **Нюанс (фиксируем в доках):** прерывает только на `await`-точках. `make_decision`
+  синхронный и быстрый, поэтому таймаут — **формальный предохранитель** от
+  зависаний на I/O в будущем, а не жёсткий killer текущего хендлера. Для текущего
+  кода это приемлемо и осознанно.
+- **Область:** только `POST /applications`.
+- **Выключение:** `REQUEST_TIMEOUT_SECONDS=0` отключает таймаут.
+
+### Правки `metrics.py` — два счётчика
+
+| Метрика | Тип | Лейблы | Назначение |
+|---|---|---|---|
+| `petbank_rate_limited_total` | Counter | — | Инкремент на каждый `429` от лимитера |
+| `petbank_request_timeouts_total` | Counter | — | Инкремент на каждый таймаут (`503`) |
+
+(`http_requests_total` от instrumentator и так считает `429`/`503` по статусу —
+эти счётчики дают явные, удобные для SLO-дашборда величины.)
+
+### Правки `server.py` — регистрация middleware + конфиг
+
+- Чтение конфигурации из env при старте (см. ниже).
+- Регистрация двух middleware. Желаемая цепочка (снаружи внутрь):
+  `log_requests` → rate-limit → timeout → хендлер. То есть `log_requests`
+  остаётся внешним и ставит `X-Request-ID`/логирует **все** ответы, включая
+  `429`/`503`; лимит отсекает раньше таймаута. instrumentator считает финальный
+  статус. Конкретная регистрация — деталь реализации, проверяется тестами.
+
+### SLO в Grafana (вне репозитория)
+
+Добавить в дашборд `petbank-business` секцию «SLO» (через Grafana API, роль Editor):
+- p95-латентность с линией-порогом 200 мс + stat «p95 vs SLO» (зелёный/красный);
+- RPS с ориентиром 100; доля ответов не-`5xx` как «SLO compliance»;
+- счётчики `petbank_rate_limited_total` и `petbank_request_timeouts_total`.
+- **Алерт:** правило Grafana «p95 > 200 мс в течение 5 минут». Best-effort как Editor.
+  **Оговорка:** contact point для уведомлений может требовать роли Admin — тогда
+  алерт живёт как состояние в Grafana без внешней отправки.
+
+## Конфигурация (env)
+
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `RATE_LIMIT_RPS` | `100` | Скорость пополнения токенов (RPS). `0` — лимит выключен |
+| `RATE_LIMIT_BURST` | `= RATE_LIMIT_RPS` | Ёмкость bucket (допустимый всплеск) |
+| `REQUEST_TIMEOUT_SECONDS` | `1.0` | Таймаут запроса. `0` — таймаут выключен |
+
+Стиль — как существующие `PORT`/`GIT_COMMIT`/`APP_VERSION`. Значения добавить в
+`.env.example` и в таблицу env в `docs/ARCHITECTURE.md`.
+
+## Тесты (`tests/`, pytest + `TestClient`)
+
+`tests/test_ratelimit.py`:
+- В пределах ёмкости — `200`; следующий сверх лимита — `429` с `Retry-After`.
+- После «прокрутки» инжектированных часов токены пополняются → снова `200`.
+- `/health` и `/metrics` не лимитируются (много запросов подряд — все `200`).
+- Тело `429` — JSON с `detail`.
+
+`tests/test_timeout.py`:
+- Хендлер с `await asyncio.sleep(> timeout)` (через тестовый роутер/мелкий
+  таймаут) → `503`; быстрый — `200`.
+
+`tests/test_metrics.py` (дополнить):
+- После `429` присутствует `petbank_rate_limited_total`.
+- После таймаута присутствует `petbank_request_timeouts_total`.
+
+Существующие тесты остаются зелёными. Метрики глобальны — проверяем наличие
+строк/лейблов, не точные значения.
+
+## Файлы
+
+| Файл | Действие |
+|---|---|
+| `ratelimit.py` | **Новый**: `TokenBucket` + middleware лимитера |
+| `request_timeout.py` | **Новый**: middleware таймаута |
+| `metrics.py` | `+petbank_rate_limited_total`, `+petbank_request_timeouts_total` |
+| `server.py` | Чтение env-конфига, регистрация двух middleware |
+| `tests/test_ratelimit.py` | **Новый** |
+| `tests/test_timeout.py` | **Новый** |
+| `tests/test_metrics.py` | Дополнить (счётчики 429/таймаутов) |
+| `.env.example` | `+RATE_LIMIT_RPS`, `+RATE_LIMIT_BURST`, `+REQUEST_TIMEOUT_SECONDS` |
+| `docs/ARCHITECTURE.md`, `docs/OPERATIONS.md` | env-таблица, раздел SLO, нюанс таймаута |
+
+## Зависимости
+
+Новых нет. Используются stdlib (`asyncio`, `time`), FastAPI/Starlette,
+`prometheus_client` (уже есть).
+
+## Доставка
+
+1. **PR в репозиторий** — код + тесты + доки (ветка `feat/ratelimit-timeout-slo` от `main`).
+2. **Отдельно** — SLO-панели и алерт в Grafana через API (вне git, на живом инстансе).
+
+## Принятые решения / альтернативы
+
+- **Свой middleware** для лимитера (vs `slowapi` / `fastapi-limiter`+Redis):
+  минимум зависимостей, глобальный лимит тривиален, ложится в стиль проекта.
+- **Глобальный лимит** (vs per-IP): прямо матчит SLO «100 RPS глобально».
+- **Мягкий SLO** (vs жёсткий 200 мс таймаут): таймаут-предохранитель выше SLO,
+  сам SLO меряем/алертим — чтобы не рубить легитимный хвост под нагрузкой.
+- **Зафиксированные дефолты:** таймаут отдаёт `503`, дефолт таймаута `1.0 с`,
+  бёрст `= 100`.
