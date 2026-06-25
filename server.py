@@ -12,6 +12,7 @@
 import json
 import logging
 import os
+import re
 import sys
 import time
 import uuid
@@ -83,6 +84,24 @@ class ApplicationRequest(BaseModel):
         if not isinstance(v, str):
             raise ValueError("Должно быть строкой")
         return v.strip()
+
+    @field_validator("birth_date", mode="before")
+    @classmethod
+    def parse_strict_birth_date(cls, v: object) -> date:
+        # Уже чистый date (но не datetime) — принимаем как есть.
+        if isinstance(v, date) and not isinstance(v, datetime):
+            return v
+        if not isinstance(v, str):
+            raise ValueError("Дата должна быть строкой в формате ГГГГ-ММ-ДД")
+        s = v.strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            raise ValueError(
+                "Дата должна быть в формате ГГГГ-ММ-ДД (например, 2000-05-15)"
+            )
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError("Несуществующая дата (проверьте месяц и день)")
 
     @field_validator("birth_date", mode="after")
     @classmethod
