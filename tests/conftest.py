@@ -26,3 +26,15 @@ async def db_session(db_setup):
     """Отдельная сессия для прямых тестов слоя данных."""
     async with db.AsyncSessionLocal() as session:
         yield session
+
+
+@pytest_asyncio.fixture
+async def async_client(db_setup):
+    """HTTP-клиент поверх ASGI-приложения; БД уже сконфигурирована фикстурой на SQLite."""
+    from httpx import ASGITransport, AsyncClient
+
+    from server import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
