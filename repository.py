@@ -1,0 +1,66 @@
+"""Операции с БД: найти-или-создать пользователя и сохранить заявку."""
+
+import uuid
+from datetime import date, datetime
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models import Application, User
+
+
+async def get_or_create_user(
+    session: AsyncSession,
+    *,
+    last_name: str,
+    first_name: str,
+    middle_name: str,
+    birth_date: date,
+    phone: str,
+) -> User:
+    """Вернуть пользователя по связке ФИО+ДР+телефон или создать нового."""
+    stmt = select(User).where(
+        User.last_name == last_name,
+        User.first_name == first_name,
+        User.middle_name == middle_name,
+        User.birth_date == birth_date,
+        User.phone == phone,
+    )
+    user = (await session.execute(stmt)).scalar_one_or_none()
+    if user is not None:
+        return user
+
+    user = User(
+        last_name=last_name, first_name=first_name, middle_name=middle_name,
+        birth_date=birth_date, phone=phone,
+    )
+    session.add(user)
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Параллельный запрос успел создать того же пользователя — берём существующего.
+        await session.rollback()
+        user = (await session.execute(stmt)).scalar_one()
+    return user
+
+
+async def save_application(
+    session: AsyncSession,
+    *,
+    application_id: uuid.UUID,
+    user: User,
+    amount: float | None,
+    country: str,
+    status: str,
+    reasons: list[str],
+    received_at: datetime,
+) -> Application:
+    """Создать заявку, привязанную к пользователю."""
+    application = Application(
+        application_id=application_id, user=user, amount=amount,
+        country=country, status=status, reasons=reasons, received_at=received_at,
+    )
+    session.add(application)
+    await session.flush()
+    return application
