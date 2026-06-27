@@ -1,6 +1,6 @@
 """PetBank — простейший сервер приёма заявок.
 
-Запуск:  python server.py   (или  python server.py 8080  — другой порт)
+Запуск:  python app/src/main.py   (или  python app/src/server.py 8080  — другой порт)
 
 Эндпоинты:
     POST /applications  — подать заявку, вернёт решение approved / declined

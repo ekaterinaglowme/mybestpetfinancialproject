@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
-# server.py лежит в корне — добавляем корень в путь, чтобы тесты делали `import server`.
-pythonpath = ["."]
+# Код лежит в app/src — добавляем его в путь, чтобы тесты делали `import server`.
+pythonpath = ["app/src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"

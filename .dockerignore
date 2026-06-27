@@ -1,36 +1,43 @@
-# Окружение и кеши
-.venv
-venv
-env
-ENV
+# В образ Dockerfile берёт только requirements.txt и папку app/.
+# Здесь — что не тащить даже в build-контекст (быстрее сборка, без секретов/мусора).
+
+# Секреты — никогда в образ
+.env
+.env.*
+
+# VCS / CI
+.git
+.gitignore
+.github
+
+# Python-кеши и артефакты
 __pycache__
 *.py[cod]
 *.so
 .pytest_cache
 .mypy_cache
 
-# VCS и CI
-.git
-.gitignore
-.github
-
-# IDE
+# Окружения / IDE / агент / ОС
+.venv
+venv
+env
+ENV
 .idea
 .vscode
+.claude
+.DS_Store
 
-# Секреты — никогда не попадают в образ
-.env
-.env.*
-!.env.example
-
-# Не нужно для рантайма
+# Не входит в образ (Dockerfile копирует только app/) — и в контексте не нужно.
+# alembic гоняется отдельной job на раннере (migrate.yml), не в образе.
 tests
 docs
 deploy
-*.md
-docker-compose.yml
-openapi.yaml
-requests.http
+alembic
+alembic.ini
 requirements-dev.txt
-app.log
-.DS_Store
+requests.http
+docker-compose.yml
+*.md
+*.log
+*.db
+*.sqlite3

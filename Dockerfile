@@ -13,11 +13,9 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Затем код приложения: server.py + вспомогательные модули.
-# metrics.py — метрики, logging_setup.py — JSON-логи, ratelimit.py — рейт-лимит,
-# request_timeout.py — таймаут, db.py/models.py/repository.py — слой БД,
-# main.py — точка входа.
-COPY server.py main.py metrics.py logging_setup.py ratelimit.py request_timeout.py db.py models.py repository.py ./
+# Затем всё приложение одной папкой: app/ → /app (код в /app/src, ресурсы в /app/resources).
+# Любой новый файл внутри app/ попадает в образ автоматически — COPY править не нужно.
+COPY app/ ./
 
 # Версия/коммит приложения для метрики petbank_app_info. Прокидывается из CI
 # build-arg GIT_COMMIT (github.sha); локально по умолчанию "unknown".
@@ -34,4 +32,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
 
-CMD ["python", "main.py"]
+# WORKDIR=/app, код в /app/src → sys.path[0]=/app/src, импорты остаются плоскими.
+CMD ["python", "src/main.py"]

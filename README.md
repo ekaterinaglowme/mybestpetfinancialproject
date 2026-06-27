@@ -19,12 +19,12 @@ pip install -r requirements.txt
 ## Запуск
 
 ```bash
-python server.py
+python app/src/main.py
 # или другой порт:
-python server.py 8080
+python app/src/server.py 8080
 ```
 
-В PyCharm можно просто нажать зелёную кнопку **Run** на `main.py`.
+В PyCharm можно просто нажать зелёную кнопку **Run** на `app/src/main.py`.
 
 После старта в консоли появится:
 
@@ -73,8 +73,8 @@ PetBank запущен: http://localhost:8000  (Ctrl+C — остановить)
 
 ## Как дёрнуть
 
-**Postman:** проще всего импортировать контракт `openapi.yaml`
-(*Import → File → openapi.yaml*) — Postman сам соберёт коллекцию с примерами.
+**Postman:** проще всего импортировать контракт `app/resources/openapi.yaml`
+(*Import → File → app/resources/openapi.yaml*) — Postman сам соберёт коллекцию с примерами.
 Или вручную: `POST http://localhost:8000/applications`, Body → raw → JSON, тело как выше.
 
 **PyCharm:** откройте `requests.http` и жмите ▶ над нужным запросом.
@@ -96,11 +96,26 @@ Invoke-RestMethod -Uri http://localhost:8000/applications -Method Post -ContentT
 
 ## Файлы
 
-- `server.py` — сам сервер (вся логика тут).
-- `main.py` — точка входа (запускает `server.py`).
-- `requirements.txt` — зависимости для запуска (FastAPI, Uvicorn).
-- `openapi.yaml` — контракт API, импортируется в Postman.
-- `requests.http` — готовые запросы для PyCharm.
+Приложение — одна папка `app/` (её и заворачиваем в Docker-образ):
+
+```
+app/
+├── src/                    # код
+│   ├── main.py             # точка входа (запускает server.py)
+│   ├── server.py           # сервер: бизнес-логика и эндпоинты
+│   ├── logging_setup.py    # JSON-логи, request_id
+│   ├── metrics.py          # Prometheus-метрики
+│   ├── ratelimit.py        # rate limiter
+│   ├── request_timeout.py  # таймаут-предохранитель
+│   ├── db.py               # подключение к Postgres
+│   ├── models.py           # ORM-модели (SQLAlchemy)
+│   └── repository.py       # сохранение user/application
+└── resources/
+    └── openapi.yaml        # контракт API (импорт в Postman)
+```
+
+В корне репозитория (в образ не идут): `requirements.txt`, `requests.http`,
+`tests/`, миграции `alembic/` (применяются отдельной job `migrate.yml`).
 
 ## Защита под нагрузкой и SLO
 
@@ -126,5 +141,5 @@ Invoke-RestMethod -Uri http://localhost:8000/applications -Method Post -ContentT
 
 ## Куда расти
 
-Новые правила одобрения добавляются в функцию `make_decision` в `server.py` —
+Новые правила одобрения добавляются в функцию `make_decision` в `app/src/server.py` —
 дописывайте проверки и складывайте причины отказа в список `reasons`.
