@@ -1,20 +1,21 @@
-"""Общие тестовые фикстуры: in-memory SQLite вместо Postgres."""
+"""Общие тестовые фикстуры: SQLite-файл вместо Postgres для всех тестов.
+
+Файловый SQLite (а не in-memory) — чтобы и синхронный TestClient (origin-тесты
+метрик/логов/ratelimit), и async httpx-клиент видели одну схему: каждый из них
+открывает своё соединение к файлу в своём event loop. БД конфигурируется autouse,
+т.к. ручка /applications теперь всегда ходит в базу.
+"""
 
 import pytest_asyncio
-from sqlalchemy.pool import StaticPool
 
 import db
-import models  # noqa: F401  — регистрирует таблицы в Base.metadata
+import models  # noqa: F401 — регистрирует таблицы в Base.metadata
 
 
-@pytest_asyncio.fixture
-async def db_setup():
-    """Сконфигурировать db на единый in-memory SQLite и создать схему."""
-    db.configure(
-        "sqlite+aiosqlite:///:memory:",
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
+@pytest_asyncio.fixture(autouse=True)
+async def db_setup(tmp_path):
+    """Каждому тесту — свежий SQLite-файл со схемой."""
+    db.configure(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
     async with db.engine.begin() as conn:
         await conn.run_sync(db.Base.metadata.create_all)
     yield
