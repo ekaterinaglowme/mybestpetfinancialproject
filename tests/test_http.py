@@ -1,20 +1,6 @@
-"""Интеграционные тесты HTTP-слоя.
-
-fastapi.testclient.TestClient гоняет ASGI-приложение in-process через тот же
-стек, что обработал бы настоящий HTTP-запрос — без поднятия реального сокета.
-"""
+"""Интеграционные тесты HTTP-слоя (httpx + ASGITransport, БД — in-memory SQLite)."""
 
 from datetime import date
-
-import pytest
-from fastapi.testclient import TestClient
-
-from server import app
-
-
-@pytest.fixture()
-def client():
-    return TestClient(app)
 
 
 def _adult_payload():
@@ -28,20 +14,20 @@ def _adult_payload():
     }
 
 
-def test_health(client):
-    resp = client.get("/health")
+async def test_health(async_client):
+    resp = await async_client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
 
 
-def test_root_help(client):
-    resp = client.get("/")
+async def test_root_help(async_client):
+    resp = await async_client.get("/")
     assert resp.status_code == 200
     assert resp.json()["service"] == "PetBank"
 
 
-def test_application_approved(client):
-    resp = client.post("/applications", json=_adult_payload())
+async def test_application_approved(async_client):
+    resp = await async_client.post("/applications", json=_adult_payload())
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "approved"
@@ -49,28 +35,28 @@ def test_application_approved(client):
     assert body["reasons"] == []
 
 
-def test_application_declined_minor(client):
+async def test_application_declined_minor(async_client):
     payload = _adult_payload()
     payload["birth_date"] = date.today().replace(year=date.today().year - 10).isoformat()
-    resp = client.post("/applications", json=payload)
+    resp = await async_client.post("/applications", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "declined"
     assert body["reasons"]
 
 
-def test_application_declined_blocked_country(client):
+async def test_application_declined_blocked_country(async_client):
     payload = _adult_payload()
     payload["country"] = "Китай"
-    resp = client.post("/applications", json=payload)
+    resp = await async_client.post("/applications", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "declined"
     assert any("Китай" in reason for reason in body["reasons"])
 
 
-def test_application_validation_error(client):
-    resp = client.post("/applications", json={"first_name": "Иван"})
+async def test_application_validation_error(async_client):
+    resp = await async_client.post("/applications", json={"first_name": "Иван"})
     assert resp.status_code == 422
     body = resp.json()
     assert "detail" in body
@@ -78,28 +64,28 @@ def test_application_validation_error(client):
     assert "last_name" in fields_with_errors
 
 
-def test_application_invalid_birth_date_returns_422(client):
+async def test_application_invalid_birth_date_returns_422(async_client):
     payload = _adult_payload()
     payload["birth_date"] = "15.05.2000"
-    resp = client.post("/applications", json=payload)
+    resp = await async_client.post("/applications", json=payload)
     assert resp.status_code == 422
     body = resp.json()
     fields_with_errors = [e["loc"][-1] for e in body["detail"]]
     assert "birth_date" in fields_with_errors
 
 
-def test_application_valid_birth_date_ok(client):
+async def test_application_valid_birth_date_ok(async_client):
     payload = _adult_payload()
     payload["birth_date"] = "2000-05-15"
-    resp = client.post("/applications", json=payload)
+    resp = await async_client.post("/applications", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert "status" in body
     assert "applicant" in body
 
 
-def test_application_invalid_json(client):
-    resp = client.post(
+async def test_application_invalid_json(async_client):
+    resp = await async_client.post(
         "/applications",
         content=b"{not json",
         headers={"Content-Type": "application/json"},
@@ -107,6 +93,6 @@ def test_application_invalid_json(client):
     assert resp.status_code == 422
 
 
-def test_unknown_path_404(client):
-    resp = client.get("/nope")
+async def test_unknown_path_404(async_client):
+    resp = await async_client.get("/nope")
     assert resp.status_code == 404

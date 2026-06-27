@@ -13,9 +13,11 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Затем код приложения. Бизнес-логика в server.py, метрики — в metrics.py,
-# JSON-логи — в logging_setup.py, main.py — точка входа.
-COPY server.py main.py metrics.py logging_setup.py ./
+# Затем код приложения: server.py + вспомогательные модули.
+# metrics.py — метрики, logging_setup.py — JSON-логи, ratelimit.py — рейт-лимит,
+# request_timeout.py — таймаут, db.py/models.py/repository.py — слой БД,
+# main.py — точка входа.
+COPY server.py main.py metrics.py logging_setup.py ratelimit.py request_timeout.py db.py models.py repository.py ./
 
 # Версия/коммит приложения для метрики petbank_app_info. Прокидывается из CI
 # build-arg GIT_COMMIT (github.sha); локально по умолчанию "unknown".

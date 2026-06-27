@@ -16,12 +16,19 @@ import re
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, ConfigDict, field_validator
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+import db
+from db import get_session
+from repository import get_or_create_user, save_application
 
 from logging_setup import request_id_ctx, setup_logging
 from metrics import (APPLICATION_AMOUNT_RUB, DECISIONS, RATE_LIMITED,
@@ -208,7 +215,17 @@ def make_decision(payload: ApplicationRequest) -> dict:
 
 # --- HTTP-слой -------------------------------------------------------------
 
-app = FastAPI(title="PetBank")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    own = db.AsyncSessionLocal is None       # в тестах уже сконфигурировано на SQLite
+    if own:
+        db.configure(db.build_dsn())
+    yield
+    if own:
+        await db.dispose()
+
+
+app = FastAPI(title="PetBank", lifespan=lifespan)
 
 # --- Защита /applications под нагрузкой (env-конфиг; 0 = выключить) ---
 _RATE_LIMIT_RPS = float(os.environ.get("RATE_LIMIT_RPS", "100"))
@@ -298,8 +315,34 @@ def root():
 
 
 @app.post("/applications", response_model=ApplicationDecision)
-async def create_application(payload: ApplicationRequest):
-    return make_decision(payload)
+async def create_application(
+    payload: ApplicationRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    decision = make_decision(payload)
+    try:
+        user = await get_or_create_user(
+            session,
+            last_name=payload.last_name,
+            first_name=payload.first_name,
+            middle_name=payload.middle_name,
+            birth_date=payload.birth_date,
+            phone=payload.phone,
+        )
+        await save_application(
+            session,
+            application_id=uuid.UUID(decision["application_id"]),
+            user=user,
+            amount=payload.amount,
+            country=payload.country,
+            status=decision["status"],
+            reasons=decision["reasons"],
+            received_at=datetime.fromisoformat(decision["received_at"]),
+        )
+    except SQLAlchemyError as exc:
+        logger.exception("Не удалось сохранить заявку %s", decision["application_id"])
+        raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc
+    return decision
 
 
 def run(host="0.0.0.0", port=None):

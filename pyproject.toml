@@ -2,3 +2,4 @@
 # server.py лежит в корне — добавляем корень в путь, чтобы тесты делали `import server`.
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_mode = "auto"
