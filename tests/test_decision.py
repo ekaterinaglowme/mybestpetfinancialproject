@@ -115,6 +115,40 @@ def test_request_birth_date_in_future():
         _valid_request(birth_date=future)
 
 
+def test_request_birth_date_error_message_russian():
+    with pytest.raises(Exception) as exc:
+        _valid_request(birth_date="15.05.2000")
+    assert "ГГГГ-ММ-ДД" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad_value", [
+    "15.05.2000",
+    "2000/05/15",
+    "2000-5-5",
+    "2000-05-15T10:00:00",
+    1000000,
+    20000515,
+])
+def test_request_birth_date_strict_format_rejected(bad_value):
+    with pytest.raises(Exception):
+        _valid_request(birth_date=bad_value)
+
+
+def test_request_birth_date_nonexistent_rejected():
+    with pytest.raises(Exception):
+        _valid_request(birth_date="2000-13-40")
+
+
+def test_request_birth_date_accepts_date_object():
+    req = _valid_request(birth_date=date(2000, 5, 15))
+    assert req.birth_date == date(2000, 5, 15)
+
+
+def test_request_country_not_string_rejected():
+    with pytest.raises(Exception):
+        _valid_request(country=123)
+
+
 def test_request_amount_optional():
     req = ApplicationRequest.model_validate({
         "last_name": "Иванов",

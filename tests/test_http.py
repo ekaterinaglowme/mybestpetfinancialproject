@@ -78,6 +78,26 @@ def test_application_validation_error(client):
     assert "last_name" in fields_with_errors
 
 
+def test_application_invalid_birth_date_returns_422(client):
+    payload = _adult_payload()
+    payload["birth_date"] = "15.05.2000"
+    resp = client.post("/applications", json=payload)
+    assert resp.status_code == 422
+    body = resp.json()
+    fields_with_errors = [e["loc"][-1] for e in body["detail"]]
+    assert "birth_date" in fields_with_errors
+
+
+def test_application_valid_birth_date_ok(client):
+    payload = _adult_payload()
+    payload["birth_date"] = "2000-05-15"
+    resp = client.post("/applications", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "status" in body
+    assert "applicant" in body
+
+
 def test_application_invalid_json(client):
     resp = client.post(
         "/applications",
