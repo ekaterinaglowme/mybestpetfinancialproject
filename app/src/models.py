@@ -44,10 +44,15 @@ class Application(Base):
     application_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
-    country: Mapped[str] = mapped_column(String)
+    country: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String)
     reasons: Mapped[list[str]] = mapped_column(ReasonsType, default=list)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Поля заявки v2 (nullable — у заявок v1 остаются NULL).
+    email: Mapped[str | None] = mapped_column(String, nullable=True)
+    passport: Mapped[str | None] = mapped_column(String, nullable=True)
+    region: Mapped[str | None] = mapped_column(String, nullable=True)
+    loan_purpose: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

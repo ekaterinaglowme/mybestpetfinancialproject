@@ -51,15 +51,20 @@ async def save_application(
     application_id: uuid.UUID,
     user: User,
     amount: float | None,
-    country: str,
+    country: str | None,
     status: str,
     reasons: list[str],
     received_at: datetime,
+    email: str | None = None,
+    passport: str | None = None,
+    region: str | None = None,
+    loan_purpose: str | None = None,
 ) -> Application:
     """Создать заявку, привязанную к пользователю."""
     application = Application(
         application_id=application_id, user=user, amount=amount,
         country=country, status=status, reasons=reasons, received_at=received_at,
+        email=email, passport=passport, region=region, loan_purpose=loan_purpose,
     )
     session.add(application)
     await session.flush()
