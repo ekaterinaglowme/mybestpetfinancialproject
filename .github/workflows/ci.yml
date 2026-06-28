@@ -108,18 +108,11 @@ jobs:
              && docker network create petbank-net 2>/dev/null || true \
              && { docker rm -f petbank-db 2>/dev/null || true; } \
              && docker run -d --restart unless-stopped --name petbank-db \
-                  --network petbank-net \
+                  --network petbank-net -p 5432:5432 \
                   -e POSTGRES_USER='${{ secrets.DB_USER }}' \
                   -e POSTGRES_PASSWORD='${{ secrets.DB_PASSWORD }}' \
                   -e POSTGRES_DB='${{ secrets.DB_DATABASE }}' \
                   -v petbank-pgdata:/var/lib/postgresql/data postgres:16 \
-             && for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do docker exec petbank-db pg_isready -U '${{ secrets.DB_USER }}' >/dev/null 2>&1 && break; sleep 2; done \
-             && docker run --rm --network petbank-net -e PYTHONPATH=/app/src \
-                  -e DB_HOST=petbank-db -e DB_PORT=5432 \
-                  -e DB_USER='${{ secrets.DB_USER }}' \
-                  -e DB_PASSWORD='${{ secrets.DB_PASSWORD }}' \
-                  -e DB_DATABASE='${{ secrets.DB_DATABASE }}' \
-                  '${IMAGE}' alembic upgrade head \
              && docker run -d --restart unless-stopped --name petbank \
                   --network petbank-net --memory=512m --cpus=0.5 -p 8000:8000 \
                   -e DB_HOST=petbank-db -e DB_PORT=5432 \
