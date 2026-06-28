@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Application, User
+from models import Application, Loan, User
 
 
 async def get_or_create_user(
@@ -64,3 +64,18 @@ async def save_application(
     session.add(application)
     await session.flush()
     return application
+
+
+async def create_loan(
+    session: AsyncSession, *, application_id: uuid.UUID, amount, issued_at: date,
+) -> Loan:
+    """Создать заём, привязанный к заявке (application_id)."""
+    loan = Loan(application_id=application_id, amount=amount, issued_at=issued_at)
+    session.add(loan)
+    await session.flush()
+    return loan
+
+
+async def get_loan(session: AsyncSession, application_id: uuid.UUID) -> Loan | None:
+    """Вернуть заём по application_id или None."""
+    return await session.get(Loan, application_id)
