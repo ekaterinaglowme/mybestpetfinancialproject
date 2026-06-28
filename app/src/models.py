@@ -53,3 +53,16 @@ class Application(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="applications")
+
+
+class Loan(Base):
+    """Выданный заём: заводится при одобрении заявки с суммой. Ключ — application_id."""
+
+    __tablename__ = "loans"
+
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("applications.application_id"), primary_key=True
+    )
+    amount: Mapped[float] = mapped_column(Numeric(12, 2))
+    issued_at: Mapped[date] = mapped_column(Date)
+    repaid_at: Mapped[date | None] = mapped_column(Date, nullable=True)

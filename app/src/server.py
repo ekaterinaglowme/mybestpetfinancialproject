@@ -27,8 +27,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import db
+import loans
 from db import get_session
-from repository import get_or_create_user, save_application
+from repository import create_loan, get_loan, get_or_create_user, save_application
 
 from logging_setup import request_id_ctx, setup_logging
 from metrics import (APPLICATION_AMOUNT_RUB, DECISIONS, RATE_LIMITED,
@@ -146,6 +147,17 @@ class ApplicationDecision(BaseModel):
     applicant: ApplicantInfo
     reasons: list[str]
     received_at: str
+
+
+class LoanStatus(BaseModel):
+    application_id: str
+    amount: float
+    issued_at: date
+    status: str               # «отдал» / «не отдал»
+    days_elapsed: int
+    current_rate: float
+    amount_owed: float
+    repaid_at: date | None = None
 
 
 # --- Бизнес-логика ---------------------------------------------------------
@@ -339,10 +351,50 @@ async def create_application(
             reasons=decision["reasons"],
             received_at=datetime.fromisoformat(decision["received_at"]),
         )
+        # Одобрение с суммой = выдача займа (ключ — тот же application_id).
+        if decision["status"] == "approved" and payload.amount:
+            await create_loan(
+                session,
+                application_id=uuid.UUID(decision["application_id"]),
+                amount=payload.amount,
+                issued_at=date.today(),
+            )
     except SQLAlchemyError as exc:
         logger.exception("Не удалось сохранить заявку %s", decision["application_id"])
         raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc
     return decision
+
+
+@app.get("/loans/{application_id}", response_model=LoanStatus)
+async def get_loan_status(
+    application_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    loan = await get_loan(session, application_id)
+    if loan is None:
+        raise HTTPException(status_code=404, detail="Заём не найден")
+    return loans.loan_view(
+        application_id=loan.application_id, amount=loan.amount,
+        issued_at=loan.issued_at, repaid_at=loan.repaid_at, today=date.today(),
+    )
+
+
+@app.post("/loans/{application_id}/repay", response_model=LoanStatus)
+async def repay_loan(
+    application_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    loan = await get_loan(session, application_id)
+    if loan is None:
+        raise HTTPException(status_code=404, detail="Заём не найден")
+    if loan.repaid_at is not None:
+        raise HTTPException(status_code=409, detail="Заём уже отдан")
+    loan.repaid_at = date.today()
+    await session.flush()
+    return loans.loan_view(
+        application_id=loan.application_id, amount=loan.amount,
+        issued_at=loan.issued_at, repaid_at=loan.repaid_at, today=date.today(),
+    )
 
 
 def run(host="0.0.0.0", port=None):
