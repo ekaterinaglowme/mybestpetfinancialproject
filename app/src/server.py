@@ -31,6 +31,7 @@ import db
 import loans
 from db import get_session
 from repository import create_loan, get_loan, get_or_create_user, save_application
+from black_list import BlackListError, check_passport
 
 from logging_setup import request_id_ctx, setup_logging
 from metrics import (APPLICATION_AMOUNT_RUB, DECISIONS, RATE_LIMITED,
@@ -357,12 +358,14 @@ _REQUEST_TIMEOUT_SECONDS = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "1.0"
 if _REQUEST_TIMEOUT_SECONDS > 0:
     install_request_timeout(
         app, seconds=_REQUEST_TIMEOUT_SECONDS, counter=REQUEST_TIMEOUTS,
+        paths=("/applications", "/applications/v2"),
     )
 if _RATE_LIMIT_RPS > 0:
     install_rate_limiter(
         app,
         bucket=TokenBucket(_RATE_LIMIT_RPS, _RATE_LIMIT_BURST),
         counter=RATE_LIMITED,
+        paths=("/applications", "/applications/v2"),
     )
 
 # Prometheus-метрики: instrumentator сам поднимает GET /metrics и считает
@@ -505,6 +508,50 @@ async def repay_loan(
         application_id=loan.application_id, amount=loan.amount,
         issued_at=loan.issued_at, repaid_at=loan.repaid_at, today=date.today(),
     )
+
+
+@app.post("/applications/v2", response_model=ApplicationDecision)
+async def create_application_v2(
+    payload: ApplicationRequestV2,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        in_black_list = await check_passport(payload.passport)
+        check_failed = False
+    except BlackListError:
+        logger.warning("Чёрный список недоступен — заявка отклонена (fail-closed)")
+        in_black_list, check_failed = False, True
+
+    decision = make_decision_v2(
+        payload, in_black_list=in_black_list, black_list_check_failed=check_failed,
+    )
+    try:
+        user = await get_or_create_user(
+            session,
+            last_name=payload.last_name,
+            first_name=payload.first_name,
+            middle_name=payload.middle_name,
+            birth_date=payload.birth_date,
+            phone=payload.phone,
+        )
+        await save_application(
+            session,
+            application_id=uuid.UUID(decision["application_id"]),
+            user=user,
+            amount=payload.amount,
+            country=None,
+            status=decision["status"],
+            reasons=decision["reasons"],
+            received_at=datetime.fromisoformat(decision["received_at"]),
+            email=payload.email,
+            passport=payload.passport,
+            region=payload.region,
+            loan_purpose=payload.loan_purpose,
+        )
+    except SQLAlchemyError as exc:
+        logger.exception("Не удалось сохранить заявку %s", decision["application_id"])
+        raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc
+    return decision
 
 
 def run(host="0.0.0.0", port=None):
