@@ -1,15 +1,15 @@
 """applications: поля v2 + country nullable
 
-Revision ID: 0002_applications_v2
-Revises: 0001_initial
+Revision ID: 0003_applications_v2
+Revises: 0002_loans
 Create Date: 2026-06-27
 """
 import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0002_applications_v2"
-down_revision = "0001_initial"
+revision = "0003_applications_v2"
+down_revision = "0002_loans"
 branch_labels = None
 depends_on = None
 
