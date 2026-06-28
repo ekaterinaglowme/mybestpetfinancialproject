@@ -18,6 +18,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime
+from typing import Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -56,36 +57,31 @@ BLOCKED_COUNTRIES = {"китай"}
 
 # --- Pydantic-модели -------------------------------------------------------
 
-class ApplicationRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "last_name": "Иванов",
-            "first_name": "Иван",
-            "middle_name": "Иванович",
-            "phone": "+79991234567",
-            "birth_date": "2000-05-15",
-            "country": "Россия",
-            "amount": 100000,
-        }
-    })
+# Общая проверка «непустая строка после strip».
+def _strip_required_nonempty(v: object) -> str:
+    if not isinstance(v, str):
+        raise ValueError("Обязательное поле: непустая строка")
+    stripped = v.strip()
+    if not stripped:
+        raise ValueError("Обязательное поле: непустая строка")
+    return stripped
 
+
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+class ApplicationBase(BaseModel):
     last_name: str
     first_name: str
     middle_name: str = ""
     phone: str
     birth_date: date
-    country: str
     amount: float | None = None
 
-    @field_validator("last_name", "first_name", "phone", "country", mode="before")
+    @field_validator("last_name", "first_name", "phone", mode="before")
     @classmethod
-    def strip_and_require_nonempty(cls, v: object) -> str:
-        if not isinstance(v, str):
-            raise ValueError("Обязательное поле: непустая строка")
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("Обязательное поле: непустая строка")
-        return stripped
+    def _v_required_nonempty(cls, v: object) -> str:
+        return _strip_required_nonempty(v)
 
     @field_validator("middle_name", mode="before")
     @classmethod
@@ -133,6 +129,62 @@ class ApplicationRequest(BaseModel):
         if v < 0:
             raise ValueError("Должно быть неотрицательным числом")
         return float(v)
+
+
+class ApplicationRequest(ApplicationBase):
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "last_name": "Иванов",
+            "first_name": "Иван",
+            "middle_name": "Иванович",
+            "phone": "+79991234567",
+            "birth_date": "2000-05-15",
+            "country": "Россия",
+            "amount": 100000,
+        }
+    })
+
+    country: str
+
+    @field_validator("country", mode="before")
+    @classmethod
+    def _v_country(cls, v: object) -> str:
+        return _strip_required_nonempty(v)
+
+
+class ApplicationRequestV2(ApplicationBase):
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "last_name": "Иванов",
+            "first_name": "Иван",
+            "middle_name": "Иванович",
+            "phone": "+79991234567",
+            "birth_date": "2000-05-15",
+            "email": "ivan@example.ru",
+            "passport": "1234567890",
+            "region": "Москва",
+            "loan_purpose": "покупка",
+            "amount": 100000,
+        }
+    })
+
+    email: str
+    passport: str
+    region: str
+    loan_purpose: Literal["покупка", "перекредитование"]
+
+    @field_validator("passport", "region", mode="before")
+    @classmethod
+    def _v_required_nonempty_v2(cls, v: object) -> str:
+        return _strip_required_nonempty(v)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _v_email(cls, v: object) -> str:
+        s = _strip_required_nonempty(v)
+        if not _EMAIL_RE.fullmatch(s):
+            raise ValueError("Некорректный email")
+        return s
 
 
 class ApplicantInfo(BaseModel):
