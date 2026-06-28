@@ -104,6 +104,7 @@ jobs:
             "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
             "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin \
              && docker pull '${IMAGE}' \
+             && { docker image prune -af 2>/dev/null || true; } \
              && { docker rm -f petbank 2>/dev/null || true; } \
              && docker network create petbank-net 2>/dev/null || true \
              && docker run -d --restart unless-stopped --name petbank \
