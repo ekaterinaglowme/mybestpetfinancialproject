@@ -44,12 +44,13 @@ class TokenBucket:
 
 
 def install_rate_limiter(app: FastAPI, *, bucket: TokenBucket, counter,
-                         path: str = "/applications", method: str = "POST") -> None:
-    """Вешает на `app` middleware: лимитирует method+path, иначе 429."""
+                         paths: tuple[str, ...] = ("/applications",),
+                         method: str = "POST") -> None:
+    """Вешает на `app` middleware: лимитирует method+paths, иначе 429."""
 
     @app.middleware("http")
     async def _rate_limit(request: Request, call_next):
-        if request.method == method and request.url.path == path:
+        if request.method == method and request.url.path in paths:
             if not bucket.allow():
                 counter.inc()
                 retry = max(1, round(bucket.seconds_until_token()))

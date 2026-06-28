@@ -18,6 +18,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime
+from typing import Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -30,6 +31,7 @@ import db
 import loans
 from db import get_session
 from repository import create_loan, get_loan, get_or_create_user, save_application
+from black_list import BlackListError, check_passport
 
 from logging_setup import request_id_ctx, setup_logging
 from metrics import (APPLICATION_AMOUNT_RUB, DECISIONS, RATE_LIMITED,
@@ -56,36 +58,31 @@ BLOCKED_COUNTRIES = {"китай"}
 
 # --- Pydantic-модели -------------------------------------------------------
 
-class ApplicationRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "last_name": "Иванов",
-            "first_name": "Иван",
-            "middle_name": "Иванович",
-            "phone": "+79991234567",
-            "birth_date": "2000-05-15",
-            "country": "Россия",
-            "amount": 100000,
-        }
-    })
+# Общая проверка «непустая строка после strip».
+def _strip_required_nonempty(v: object) -> str:
+    if not isinstance(v, str):
+        raise ValueError("Обязательное поле: непустая строка")
+    stripped = v.strip()
+    if not stripped:
+        raise ValueError("Обязательное поле: непустая строка")
+    return stripped
 
+
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+class ApplicationBase(BaseModel):
     last_name: str
     first_name: str
     middle_name: str = ""
     phone: str
     birth_date: date
-    country: str
     amount: float | None = None
 
-    @field_validator("last_name", "first_name", "phone", "country", mode="before")
+    @field_validator("last_name", "first_name", "phone", mode="before")
     @classmethod
-    def strip_and_require_nonempty(cls, v: object) -> str:
-        if not isinstance(v, str):
-            raise ValueError("Обязательное поле: непустая строка")
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("Обязательное поле: непустая строка")
-        return stripped
+    def _v_required_nonempty(cls, v: object) -> str:
+        return _strip_required_nonempty(v)
 
     @field_validator("middle_name", mode="before")
     @classmethod
@@ -133,6 +130,62 @@ class ApplicationRequest(BaseModel):
         if v < 0:
             raise ValueError("Должно быть неотрицательным числом")
         return float(v)
+
+
+class ApplicationRequest(ApplicationBase):
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "last_name": "Иванов",
+            "first_name": "Иван",
+            "middle_name": "Иванович",
+            "phone": "+79991234567",
+            "birth_date": "2000-05-15",
+            "country": "Россия",
+            "amount": 100000,
+        }
+    })
+
+    country: str
+
+    @field_validator("country", mode="before")
+    @classmethod
+    def _v_country(cls, v: object) -> str:
+        return _strip_required_nonempty(v)
+
+
+class ApplicationRequestV2(ApplicationBase):
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "last_name": "Иванов",
+            "first_name": "Иван",
+            "middle_name": "Иванович",
+            "phone": "+79991234567",
+            "birth_date": "2000-05-15",
+            "email": "ivan@example.ru",
+            "passport": "1234567890",
+            "region": "Москва",
+            "loan_purpose": "покупка",
+            "amount": 100000,
+        }
+    })
+
+    email: str
+    passport: str
+    region: str
+    loan_purpose: Literal["покупка", "перекредитование"]
+
+    @field_validator("passport", "region", mode="before")
+    @classmethod
+    def _v_required_nonempty_v2(cls, v: object) -> str:
+        return _strip_required_nonempty(v)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _v_email(cls, v: object) -> str:
+        s = _strip_required_nonempty(v)
+        if not _EMAIL_RE.fullmatch(s):
+            raise ValueError("Некорректный email")
+        return s
 
 
 class ApplicantInfo(BaseModel):
@@ -225,6 +278,64 @@ def make_decision(payload: ApplicationRequest) -> dict:
     }
 
 
+def make_decision_v2(
+    payload: "ApplicationRequestV2",
+    *,
+    in_black_list: bool = False,
+    black_list_check_failed: bool = False,
+) -> dict:
+    """Решение по заявке v2: правила — возраст < MIN_AGE и чёрный список."""
+    today = date.today()
+    age = calculate_age(payload.birth_date, today)
+    application_id = str(uuid.uuid4())
+
+    logger.info(
+        "Заявка v2 %s: %s %s, возраст %d, регион %s",
+        application_id, payload.last_name, payload.first_name, age, payload.region,
+    )
+
+    reasons = []
+    if age < MIN_AGE:
+        reason = f"Возраст заявителя {age} лет — меньше минимально допустимого {MIN_AGE}"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="age_below_min").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if in_black_list:
+        reason = "Паспорт в чёрном списке"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="black_list").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if black_list_check_failed:
+        reason = "Не удалось проверить паспорт по чёрному списку — заявка отклонена"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="black_list_check_unavailable").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+
+    status = "approved" if not reasons else "declined"
+    DECISIONS.labels(status=status, country="-").inc()
+    if payload.amount is not None:
+        APPLICATION_AMOUNT_RUB.observe(payload.amount)
+    logger.info(
+        "Заявка %s — итог: %s", application_id, status.upper(),
+        extra={"application_id": application_id, "status": status},
+    )
+
+    full_name = " ".join(
+        part for part in (payload.last_name, payload.first_name, payload.middle_name) if part
+    )
+    return {
+        "application_id": application_id,
+        "status": status,
+        "applicant": {
+            "full_name": full_name,
+            "age": age,
+            "phone": payload.phone,
+        },
+        "reasons": reasons,
+        "received_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 # --- HTTP-слой -------------------------------------------------------------
 
 @asynccontextmanager
@@ -247,12 +358,14 @@ _REQUEST_TIMEOUT_SECONDS = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "1.0"
 if _REQUEST_TIMEOUT_SECONDS > 0:
     install_request_timeout(
         app, seconds=_REQUEST_TIMEOUT_SECONDS, counter=REQUEST_TIMEOUTS,
+        paths=("/applications", "/applications/v2"),
     )
 if _RATE_LIMIT_RPS > 0:
     install_rate_limiter(
         app,
         bucket=TokenBucket(_RATE_LIMIT_RPS, _RATE_LIMIT_BURST),
         counter=RATE_LIMITED,
+        paths=("/applications", "/applications/v2"),
     )
 
 # Prometheus-метрики: instrumentator сам поднимает GET /metrics и считает
@@ -395,6 +508,50 @@ async def repay_loan(
         application_id=loan.application_id, amount=loan.amount,
         issued_at=loan.issued_at, repaid_at=loan.repaid_at, today=date.today(),
     )
+
+
+@app.post("/applications/v2", response_model=ApplicationDecision)
+async def create_application_v2(
+    payload: ApplicationRequestV2,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        in_black_list = await check_passport(payload.passport)
+        check_failed = False
+    except BlackListError:
+        logger.warning("Чёрный список недоступен — заявка отклонена (fail-closed)")
+        in_black_list, check_failed = False, True
+
+    decision = make_decision_v2(
+        payload, in_black_list=in_black_list, black_list_check_failed=check_failed,
+    )
+    try:
+        user = await get_or_create_user(
+            session,
+            last_name=payload.last_name,
+            first_name=payload.first_name,
+            middle_name=payload.middle_name,
+            birth_date=payload.birth_date,
+            phone=payload.phone,
+        )
+        await save_application(
+            session,
+            application_id=uuid.UUID(decision["application_id"]),
+            user=user,
+            amount=payload.amount,
+            country=None,
+            status=decision["status"],
+            reasons=decision["reasons"],
+            received_at=datetime.fromisoformat(decision["received_at"]),
+            email=payload.email,
+            passport=payload.passport,
+            region=payload.region,
+            loan_purpose=payload.loan_purpose,
+        )
+    except SQLAlchemyError as exc:
+        logger.exception("Не удалось сохранить заявку %s", decision["application_id"])
+        raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc
+    return decision
 
 
 def run(host="0.0.0.0", port=None):

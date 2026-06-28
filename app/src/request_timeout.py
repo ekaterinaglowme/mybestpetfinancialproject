@@ -12,12 +12,13 @@ from starlette.responses import JSONResponse
 
 
 def install_request_timeout(app: FastAPI, *, seconds: float, counter,
-                            path: str = "/applications", method: str = "POST") -> None:
-    """Вешает на `app` middleware: ограничивает время method+path, иначе 503."""
+                            paths: tuple[str, ...] = ("/applications",),
+                            method: str = "POST") -> None:
+    """Вешает на `app` middleware: ограничивает время method+paths, иначе 503."""
 
     @app.middleware("http")
     async def _timeout(request: Request, call_next):
-        if request.method == method and request.url.path == path:
+        if request.method == method and request.url.path in paths:
             try:
                 return await asyncio.wait_for(call_next(request), timeout=seconds)
             except asyncio.TimeoutError:
