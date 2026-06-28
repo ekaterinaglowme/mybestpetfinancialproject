@@ -17,10 +17,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Любой новый файл внутри app/ попадает в образ автоматически — COPY править не нужно.
 COPY app/ ./
 
-# Миграции БД (alembic) — чтобы прогонять `alembic upgrade head` прямо из этого образа.
-COPY alembic/ ./alembic/
-COPY alembic.ini ./
-
 # Версия/коммит приложения для метрики petbank_app_info. Прокидывается из CI
 # build-arg GIT_COMMIT (github.sha); локально по умолчанию "unknown".
 ARG GIT_COMMIT=unknown
