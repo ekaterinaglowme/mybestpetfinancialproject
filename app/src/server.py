@@ -277,6 +277,64 @@ def make_decision(payload: ApplicationRequest) -> dict:
     }
 
 
+def make_decision_v2(
+    payload: "ApplicationRequestV2",
+    *,
+    in_black_list: bool = False,
+    black_list_check_failed: bool = False,
+) -> dict:
+    """Решение по заявке v2: правила — возраст < MIN_AGE и чёрный список."""
+    today = date.today()
+    age = calculate_age(payload.birth_date, today)
+    application_id = str(uuid.uuid4())
+
+    logger.info(
+        "Заявка v2 %s: %s %s, возраст %d, регион %s",
+        application_id, payload.last_name, payload.first_name, age, payload.region,
+    )
+
+    reasons = []
+    if age < MIN_AGE:
+        reason = f"Возраст заявителя {age} лет — меньше минимально допустимого {MIN_AGE}"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="age_below_min").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if in_black_list:
+        reason = "Паспорт в чёрном списке"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="black_list").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if black_list_check_failed:
+        reason = "Не удалось проверить паспорт по чёрному списку — заявка отклонена"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="black_list_check_unavailable").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+
+    status = "approved" if not reasons else "declined"
+    DECISIONS.labels(status=status, country="-").inc()
+    if payload.amount is not None:
+        APPLICATION_AMOUNT_RUB.observe(payload.amount)
+    logger.info(
+        "Заявка %s — итог: %s", application_id, status.upper(),
+        extra={"application_id": application_id, "status": status},
+    )
+
+    full_name = " ".join(
+        part for part in (payload.last_name, payload.first_name, payload.middle_name) if part
+    )
+    return {
+        "application_id": application_id,
+        "status": status,
+        "applicant": {
+            "full_name": full_name,
+            "age": age,
+            "phone": payload.phone,
+        },
+        "reasons": reasons,
+        "received_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 # --- HTTP-слой -------------------------------------------------------------
 
 @asynccontextmanager
