@@ -38,7 +38,7 @@ def test_stoplist_uchastvuet_v_formirovanii_otveta(base_url):
     действительно ходит во внешний сервис и его ответ формирует результат —
     то есть «мы туда заходим и он участвует».
 
-    Дано: два одинаковых совершеннолетних валидных заявителя, различающихся
+    Дано: два одинаковых совершеннолетних валидных заявителей, различающихся
           ТОЛЬКО паспортом — один паспорт мок СтопЛиста считает «в списке»,
           другой чистым.
     Когда: подаём обе заявки на POST /applications/v2 по реальному HTTP.
@@ -63,3 +63,23 @@ def test_stoplist_uchastvuet_v_formirovanii_otveta(base_url):
         f"СтопЛиста не влияет на результат (оба: {flagged_status!r}). "
         "Интеграция с внешним сервисом не работает."
     )
+
+
+# Паспорт, на котором мок СтопЛиста отвечает ошибкой 500 (имитация недоступности).
+ERROR_PASSPORT = "5000000000"
+
+
+@pytest.mark.blackbox
+def test_stoplist_nedostupen_fail_closed(base_url):
+    """СтопЛист недоступен → заявка не падает 5xx, а безопасно отклоняется.
+
+    Дано: паспорт, на котором мок СтопЛиста возвращает ошибку (имитация сбоя).
+    Когда: POST /applications/v2.
+    Тогда: HTTP 200 (НЕ 5xx — ключевое свойство fail-closed) и решение declined.
+           Сервис деградирует безопасно, а не ломается.
+    """
+    r = httpx.post(
+        f"{base_url}/applications/v2", json=_v2_payload(ERROR_PASSPORT), timeout=10
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "declined"

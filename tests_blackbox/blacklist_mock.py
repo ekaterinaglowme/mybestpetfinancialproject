@@ -13,8 +13,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 # Паспорт, который мок всегда считает «в чёрном списке».
-# ВАЖНО: держать синхронно с константой в тестах.
 BLACKLISTED = {"0000000000"}
+# Паспорт, на котором мок имитирует сбой сервиса (HTTP 500).
+ERROR_PASSPORTS = {"5000000000"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -25,6 +26,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/check":
             passport = parse_qs(parsed.query).get("passport", [""])[0]
+            if passport in ERROR_PASSPORTS:
+                self._json(500, {"error": "service unavailable"})
+                return
             self._json(200, {"in_terror_list": passport in BLACKLISTED})
             return
         self._json(404, {"error": "not found"})
