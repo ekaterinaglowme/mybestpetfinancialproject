@@ -13,6 +13,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+# ВАЖНО: эти паспорта продублированы литералами в тестах (test_us3_applications_v2.py,
+# test_us4_ops.py) — держать значения синхронно с тамошними *_PASSPORT.
 # Паспорт, который мок всегда считает «в чёрном списке».
 BLACKLISTED = {"0000000000"}
 # Паспорт, на котором мок имитирует сбой сервиса (HTTP 500).
