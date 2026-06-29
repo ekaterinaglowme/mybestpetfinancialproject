@@ -1,9 +1,11 @@
 """Слой подключения к PostgreSQL: DSN из env, async engine, сессия, lifespan-хелперы."""
 
+import asyncio
 import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -13,6 +15,10 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from metrics import DB_TRANSACTION_SECONDS
+
+# Сколько ждать ответ БД в readiness-пробе, прежде чем счесть её недоступной.
+# Сама проба не должна висеть дольше — иначе readiness теряет смысл.
+READY_TIMEOUT_SECONDS = float(os.environ.get("DB_READY_TIMEOUT_SECONDS", "2.0"))
 
 
 class Base(DeclarativeBase):
@@ -85,6 +91,23 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+
+
+async def check_ready() -> bool:
+    """True, если БД отвечает на SELECT 1 за отведённый таймаут.
+
+    Любой сбой (БД не сконфигурирована, недоступна, запрос завис) → False.
+    Это readiness-сигнал: «готов ли инстанс принимать трафик», а не liveness.
+    """
+    if AsyncSessionLocal is None:
+        return False
+    try:
+        async with asyncio.timeout(READY_TIMEOUT_SECONDS):
+            async with AsyncSessionLocal() as session:
+                await session.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
 
 
 @asynccontextmanager
