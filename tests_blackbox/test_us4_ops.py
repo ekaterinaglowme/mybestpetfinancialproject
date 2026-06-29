@@ -11,6 +11,8 @@ import pytest
 
 # Паспорт, на котором мок СтопЛиста отвечает с задержкой (см. blacklist_mock.py).
 SLOW_PASSPORT = "9999999999"
+# Паспорт, который мок СтопЛиста считает чистым.
+CLEAN_PASSPORT = "1234567890"
 
 
 @pytest.mark.blackbox
@@ -30,7 +32,7 @@ def test_rate_limit_otdaet_429(strict_base_url):
     """Под градом запросов часть отклоняется кодом 429.
 
     Дано: строгий стенд с низким лимитом RPS.
-    Когда: быстро шлём много POST /applications подряд.
+    Когда: быстро шлём много POST /applications/v2 подряд.
     Тогда: хотя бы один ответ — 429 (защита от перегрузки работает). Точное
            число не фиксируем — оно зависит от настроек, не от бизнес-правил.
     """
@@ -40,11 +42,14 @@ def test_rate_limit_otdaet_429(strict_base_url):
         "middle_name": "",
         "phone": "+79990000001",
         "birth_date": "1995-01-01",
-        "country": "Россия",
+        "email": "nagruzkin@example.ru",
+        "passport": CLEAN_PASSPORT,
+        "region": "Москва",
+        "loan_purpose": "покупка",
         "amount": 1000,
     }
     codes = [
-        httpx.post(f"{strict_base_url}/applications", json=payload, timeout=10).status_code
+        httpx.post(f"{strict_base_url}/applications/v2", json=payload, timeout=10).status_code
         for _ in range(20)
     ]
     assert 429 in codes, f"ни одного 429 среди {codes}"

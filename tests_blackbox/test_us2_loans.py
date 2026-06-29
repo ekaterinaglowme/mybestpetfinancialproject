@@ -10,16 +10,24 @@ import httpx
 import pytest
 
 
-def _v1_payload() -> dict:
-    # Данные подобраны так, чтобы текущие правила ЗАЯВКУ ОДОБРИЛИ (взрослый, РФ,
-    # сумма указана) — иначе lifecycle-тест ниже нечего гасить и он сделает skip.
+# Паспорт, который мок СтопЛиста считает чистым (см. tests_blackbox/blacklist_mock.py).
+CLEAN_PASSPORT = "1234567890"
+
+
+def _payload() -> dict:
+    # Данные подобраны так, чтобы текущие правила ЗАЯВКУ ОДОБРИЛИ (взрослый, паспорт
+    # не в стоп-листе, сумма указана) — иначе lifecycle-тест ниже нечего гасить и
+    # он сделает skip.
     return {
         "last_name": "Заёмщиков",
         "first_name": "Пётр",
         "middle_name": "",
         "phone": "+79995550011",
         "birth_date": "1995-03-20",
-        "country": "Россия",
+        "email": "zaemshchikov@example.ru",
+        "passport": CLEAN_PASSPORT,
+        "region": "Москва",
+        "loan_purpose": "покупка",
         "amount": 50000,
     }
 
@@ -29,13 +37,13 @@ def test_invariant_odobrenie_s_summoy_sozdaet_zaem(base_url):
     """Заём существует тогда и только тогда, когда заявка одобрена с суммой.
 
     Дано: заявка с указанной суммой.
-    Когда: POST /applications, затем GET /loans/{тот же id}.
+    Когда: POST /applications/v2, затем GET /loans/{тот же id}.
     Тогда: если решение approved — заём есть (200), сумма совпадает, статус
            «не отдал»; если declined — займа нет (404). Конкретное решение не
            навязываем — проверяем согласованность БД с решением.
     """
-    p = _v1_payload()
-    created = httpx.post(f"{base_url}/applications", json=p, timeout=10)
+    p = _payload()
+    created = httpx.post(f"{base_url}/applications/v2", json=p, timeout=10)
     assert created.status_code == 200, created.text
     body = created.json()
     app_id = body["application_id"]
@@ -58,7 +66,7 @@ def test_zhiznennyy_cikl_pogasheniya(base_url):
     Когда: GET статус → POST repay → POST repay ещё раз.
     Тогда: статус «не отдал» → после repay «отдал» (200) → повторный repay 409.
     """
-    created = httpx.post(f"{base_url}/applications", json=_v1_payload(), timeout=10)
+    created = httpx.post(f"{base_url}/applications/v2", json=_payload(), timeout=10)
     assert created.status_code == 200, created.text
     body = created.json()
     if body["status"] != "approved":

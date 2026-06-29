@@ -58,6 +58,26 @@ async def test_v2_missing_passport_422(async_client, clean_blacklist):
     assert resp.status_code == 422
 
 
+async def test_v2_loan_created_on_approval_with_amount(async_client, clean_blacklist):
+    resp = await async_client.post("/applications/v2", json=VALID)
+    assert resp.json()["status"] == "approved"
+    aid = resp.json()["application_id"]
+    loan = await async_client.get(f"/loans/{aid}")
+    assert loan.status_code == 200
+    assert loan.json()["application_id"] == aid
+    assert loan.json()["amount"] == 100000.0
+
+
+async def test_v2_no_loan_when_declined(async_client, monkeypatch):
+    async def fake(passport):
+        return True
+    monkeypatch.setattr(server, "check_passport", fake)
+    resp = await async_client.post("/applications/v2", json=VALID)
+    assert resp.json()["status"] == "declined"
+    aid = resp.json()["application_id"]
+    assert (await async_client.get(f"/loans/{aid}")).status_code == 404
+
+
 async def test_v2_persisted(async_client, clean_blacklist):
     import db
     from sqlalchemy import select
