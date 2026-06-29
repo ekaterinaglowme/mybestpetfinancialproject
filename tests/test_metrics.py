@@ -83,8 +83,17 @@ def test_app_info_metric_exposes_version_and_commit(client):
     assert "commit=" in info_lines[0]
 
 
+def test_db_write_timing_metrics_present(client):
+    # Запись заявки создаёт пользователя и заявку — обе операции замеряются,
+    # плюс общий замер транзакции на запрос.
+    _post(client, amount=100000)
+    body = client.get("/metrics").text
+    assert "petbank_db_write_seconds_bucket" in body
+    assert 'operation="save_application"' in body
+    assert "petbank_db_transaction_seconds_count" in body
+
+
 def test_protection_counters_exposed(client):
     # Счётчики защиты под нагрузкой видны на /metrics (даже при нулевом значении).
     body = client.get("/metrics").text
     assert "petbank_rate_limited_total" in body
-    assert "petbank_request_timeouts_total" in body

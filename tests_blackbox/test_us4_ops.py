@@ -1,16 +1,12 @@
 """US-4. Эксплуатационные/сквозные сценарии.
 
-429 и таймаут проверяются на отдельном «строгом» стенде (низкий лимит, короткий
-таймаут) — фикстура strict_base_url.
+429 проверяется на отдельном «строгом» стенде (низкий лимит) — фикстура
+strict_base_url.
 """
-
-import time
 
 import httpx
 import pytest
 
-# Паспорт, на котором мок СтопЛиста отвечает с задержкой (см. blacklist_mock.py).
-SLOW_PASSPORT = "9999999999"
 # Паспорт, который мок СтопЛиста считает чистым.
 CLEAN_PASSPORT = "1234567890"
 
@@ -53,37 +49,3 @@ def test_rate_limit_otdaet_429(strict_base_url):
         for _ in range(20)
     ]
     assert 429 in codes, f"ни одного 429 среди {codes}"
-
-
-@pytest.mark.blackbox
-def test_dolgiy_zapros_obryvaetsya_503(strict_base_url):
-    """Слишком долгий запрос обрывается предохранителем-таймаутом.
-
-    Дано: строгий стенд с коротким REQUEST_TIMEOUT_SECONDS; паспорт, на котором
-          мок СтопЛиста отвечает с большой задержкой.
-    Когда: POST /applications/v2 с этим паспортом.
-    Тогда: HTTP 503 (request timeout) — сервер не зависает на медленной зависимости.
-    """
-    payload = {
-        "last_name": "Долгов",
-        "first_name": "Тормоз",
-        "middle_name": "",
-        "phone": "+79990000002",
-        "birth_date": "1995-01-01",
-        "email": "slow@example.ru",
-        "passport": SLOW_PASSPORT,
-        "region": "Москва",
-        "loan_purpose": "покупка",
-        "amount": 1000,
-    }
-    # Строгий стенд делит один rate-limiter между тестами (общий TokenBucket на
-    # /applications и /applications/v2), поэтому соседний тест мог осушить бакет.
-    # Не угадываем тайминг через фиксированный sleep, а повторяем запрос, пока он
-    # не пройдёт rate-limiter (перестанет быть 429), и только тогда проверяем,
-    # что сработал предохранитель-таймаут.
-    deadline = time.time() + 15
-    r = httpx.post(f"{strict_base_url}/applications/v2", json=payload, timeout=10)
-    while r.status_code == 429 and time.time() < deadline:
-        time.sleep(0.5)
-        r = httpx.post(f"{strict_base_url}/applications/v2", json=payload, timeout=10)
-    assert r.status_code == 503, r.text

@@ -31,13 +31,13 @@ import db
 import loans
 from db import get_session
 from repository import create_loan, get_loan, get_or_create_user, save_application
+import black_list
 from black_list import BlackListError, check_passport
 
 from logging_setup import request_id_ctx, setup_logging
-from metrics import (APPLICATION_AMOUNT_RUB, DECISIONS, RATE_LIMITED,
-                     REJECTION_REASONS, REQUEST_TIMEOUTS)
+from metrics import (APPLICATION_AMOUNT_RUB, DB_WRITE_SECONDS, DECISIONS,
+                     RATE_LIMITED, REJECTION_REASONS)
 from ratelimit import TokenBucket, install_rate_limiter
-from request_timeout import install_request_timeout
 
 logger = logging.getLogger(__name__)
 access_logger = logging.getLogger("petbank.access")
@@ -343,7 +343,12 @@ async def lifespan(app: FastAPI):
     own = db.AsyncSessionLocal is None       # в тестах уже сконфигурировано на SQLite
     if own:
         db.configure(db.build_dsn())
+    own_bl = black_list._client is None      # в тестах клиент инжектят отдельно
+    if own_bl:
+        black_list.configure()
     yield
+    if own_bl:
+        await black_list.dispose()
     if own:
         await db.dispose()
 
@@ -353,13 +358,7 @@ app = FastAPI(title="PetBank", lifespan=lifespan)
 # --- Защита /applications под нагрузкой (env-конфиг; 0 = выключить) ---
 _RATE_LIMIT_RPS = float(os.environ.get("RATE_LIMIT_RPS", "100"))
 _RATE_LIMIT_BURST = float(os.environ.get("RATE_LIMIT_BURST") or _RATE_LIMIT_RPS)
-_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "1.0"))
 
-if _REQUEST_TIMEOUT_SECONDS > 0:
-    install_request_timeout(
-        app, seconds=_REQUEST_TIMEOUT_SECONDS, counter=REQUEST_TIMEOUTS,
-        paths=("/applications", "/applications/v2"),
-    )
 if _RATE_LIMIT_RPS > 0:
     install_rate_limiter(
         app,
@@ -503,7 +502,8 @@ async def repay_loan(
     if loan.repaid_at is not None:
         raise HTTPException(status_code=409, detail="Заём уже отдан")
     loan.repaid_at = date.today()
-    await session.flush()
+    with DB_WRITE_SECONDS.labels(operation="repay").time():
+        await session.flush()
     return loans.loan_view(
         application_id=loan.application_id, amount=loan.amount,
         issued_at=loan.issued_at, repaid_at=loan.repaid_at, today=date.today(),
