@@ -1,5 +1,10 @@
 [tool.pytest.ini_options]
 # Код лежит в app/src — добавляем его в путь, чтобы тесты делали `import server`.
 pythonpath = ["app/src"]
+# Только быстрые юниты по умолчанию. Чёрно-ящичные тесты лежат в tests_blackbox/
+# и запускаются отдельно: pytest tests_blackbox/  (нужен Docker).
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "blackbox: чёрно-ящичные интеграционные тесты (поднимают Docker-стенд, медленные)",
+]
