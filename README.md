@@ -138,7 +138,6 @@ app/
 │   ├── logging_setup.py    # JSON-логи, request_id
 │   ├── metrics.py          # Prometheus-метрики
 │   ├── ratelimit.py        # rate limiter
-│   ├── request_timeout.py  # таймаут-предохранитель
 │   ├── db.py               # подключение к Postgres
 │   ├── models.py           # ORM-модели (SQLAlchemy)
 │   └── repository.py       # сохранение user/application
@@ -156,9 +155,6 @@ app/
 
 - **Rate limiter** — глобальный token bucket. Сверх лимита → `429` +
   `Retry-After`. Метрика `petbank_rate_limited_total`.
-- **Таймаут-предохранитель** — долгий запрос → `503`. Метрика
-  `petbank_request_timeouts_total`. Прерывает только на `await`-точках
-  (формальный предохранитель: `make_decision` синхронный и быстрый).
 
 Конфигурация (env, `0` = выключить):
 
@@ -166,7 +162,6 @@ app/
 |---|---|---|
 | `RATE_LIMIT_RPS` | `100` | Пополнение токенов (RPS) |
 | `RATE_LIMIT_BURST` | `= RATE_LIMIT_RPS` | Ёмкость bucket (всплеск) |
-| `REQUEST_TIMEOUT_SECONDS` | `1.0` | Таймаут запроса |
 
 **SLO:** при нагрузке до 100 RPS p95 латентности `/applications` ≤ 200 мс.
 Наблюдается в Grafana (дашборд `petbank-business`, секция «SLO»).
@@ -181,8 +176,8 @@ app/
 Ручка `POST /applications/v2` перед решением проверяет паспорт по внешнему сервису:
 
 - `BLACK_LIST_URL` — базовый адрес сервиса (по умолчанию `http://212.147.238.3:8090`).
-- `BLACK_LIST_TIMEOUT_SECONDS` — таймаут запроса в секундах (по умолчанию `0.8`;
-  держать заметно меньше `REQUEST_TIMEOUT_SECONDS`).
+- `BLACK_LIST_TIMEOUT_SECONDS` — таймаут запроса к сервису в секундах
+  (по умолчанию `0.8`).
 
 Если сервис недоступен — заявка отклоняется (fail-closed).
 

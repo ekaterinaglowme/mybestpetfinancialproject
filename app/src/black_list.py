@@ -9,6 +9,8 @@ import os
 
 import httpx
 
+from metrics import EXTERNAL_CALL_SECONDS
+
 BLACK_LIST_URL = os.environ.get("BLACK_LIST_URL", "http://212.147.238.3:8090")
 BLACK_LIST_TIMEOUT_SECONDS = float(os.environ.get("BLACK_LIST_TIMEOUT_SECONDS", "0.8"))
 
@@ -27,7 +29,8 @@ async def check_passport(passport: str) -> bool:
     """True — паспорт в чёрном списке. Бросает BlackListError при любом сбое."""
     try:
         async with _make_client() as client:
-            resp = await client.get("/check", params={"passport": passport})
+            with EXTERNAL_CALL_SECONDS.labels(service="black_list").time():
+                resp = await client.get("/check", params={"passport": passport})
             resp.raise_for_status()
             return bool(resp.json()["in_terror_list"])
     except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:

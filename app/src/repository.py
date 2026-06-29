@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from metrics import DB_WRITE_SECONDS
 from models import Application, Loan, User
 
 
@@ -37,7 +38,8 @@ async def get_or_create_user(
     )
     session.add(user)
     try:
-        await session.flush()
+        with DB_WRITE_SECONDS.labels(operation="get_or_create_user").time():
+            await session.flush()
     except IntegrityError:
         # Параллельный запрос успел создать того же пользователя — берём существующего.
         await session.rollback()
@@ -67,7 +69,8 @@ async def save_application(
         email=email, passport=passport, region=region, loan_purpose=loan_purpose,
     )
     session.add(application)
-    await session.flush()
+    with DB_WRITE_SECONDS.labels(operation="save_application").time():
+        await session.flush()
     return application
 
 
@@ -77,7 +80,8 @@ async def create_loan(
     """Создать заём, привязанный к заявке (application_id)."""
     loan = Loan(application_id=application_id, amount=amount, issued_at=issued_at)
     session.add(loan)
-    await session.flush()
+    with DB_WRITE_SECONDS.labels(operation="create_loan").time():
+        await session.flush()
     return loan
 
 

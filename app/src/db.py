@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
+from metrics import DB_TRANSACTION_SECONDS
+
 
 class Base(DeclarativeBase):
     """Базовый класс для всех ORM-моделей."""
@@ -54,7 +56,8 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
+            with DB_TRANSACTION_SECONDS.time():
+                await session.commit()
         except Exception:
             await session.rollback()
             raise

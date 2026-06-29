@@ -1,5 +1,6 @@
 import httpx
 import pytest
+from prometheus_client import REGISTRY
 
 import black_list
 
@@ -50,3 +51,16 @@ async def test_timeout_raises(monkeypatch):
     _patch_client(monkeypatch, handler)
     with pytest.raises(black_list.BlackListError):
         await black_list.check_passport("555")
+
+
+async def test_external_call_duration_recorded(monkeypatch):
+    # Каждый вызов внешнего сервиса засекается в гистограмму времени.
+    def handler(request):
+        return httpx.Response(200, json={"in_terror_list": False})
+    _patch_client(monkeypatch, handler)
+    labels = {"service": "black_list"}
+    name = "petbank_external_call_seconds_count"
+    before = REGISTRY.get_sample_value(name, labels) or 0.0
+    await black_list.check_passport("777")
+    after = REGISTRY.get_sample_value(name, labels)
+    assert after == before + 1
