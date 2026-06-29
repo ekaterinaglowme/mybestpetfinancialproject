@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 ## Git workflow
 - Перед созданием новой ветки — обновить её от main: `git fetch origin && git rebase origin/main`
