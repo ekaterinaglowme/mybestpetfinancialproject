@@ -7,6 +7,38 @@
 - заявителю должно быть от **18 до 35 лет** включительно;
 - страна заявителя не должна быть в стоп-листе (по умолчанию — «Китай»).
 
+## Как это работает (заявка v2)
+
+Поток обработки `POST /applications/v2` — с проверкой паспорта по внешнему
+СтопЛисту и сохранением в БД:
+
+```mermaid
+sequenceDiagram
+    participant Front as Front (Web/Mobile)
+    participant PetBank as PetBank API
+    participant BlackList as Black List Service
+    participant DB as PostgreSQL
+    participant Client as Клиент
+
+    Front->>PetBank: POST /applications/v2<br/>email, passport, region, loan_purpose, ...
+    Note right of PetBank: Валидация данных<br/>формат, обязательные поля
+
+    PetBank->>BlackList: GET /check?passport={passport}
+    BlackList-->>PetBank: { in_terror_list: true/false }
+
+    Note right of PetBank: Решение:<br/>возраст < 18 → declined<br/>паспорт в списке → declined<br/>СтопЛист недоступен → declined (fail-closed)<br/>иначе → approved
+
+    PetBank->>DB: INSERT application<br/>данные заявки + решение
+    DB-->>PetBank: OK, application_id: UUID
+
+    PetBank-->>Front: 200 OK<br/>{ application_id, status: approved/declined, reasons }
+
+    Front-->>Client: Показать результат<br/>UUID заявки + статус
+```
+
+> Поддерживать в актуальном состоянии: при изменении ручек/полей/правил
+> обновлять эту диаграмму.
+
 ## Стек
 
 [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/).
