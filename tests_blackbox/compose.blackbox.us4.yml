@@ -1,4 +1,4 @@
-# Строгий стенд для US-4: низкий rate-limit и короткий таймаут запроса.
+# Строгий стенд для US-4: низкий rate-limit (провоцирует 429).
 # Отдельный проект и порты — может работать одновременно с основным стендом.
 name: petbank-blackbox-us4
 
@@ -40,13 +40,9 @@ services:
       DB_PASSWORD: petbank
       DB_DATABASE: petbank_test
       BLACK_LIST_URL: http://blacklist:8090
-      # Строгие пределы: маленький лимит и короткий таймаут запроса.
+      # Строгий предел: маленький лимит RPS — провоцирует 429.
       RATE_LIMIT_RPS: "2"
       RATE_LIMIT_BURST: "2"
-      REQUEST_TIMEOUT_SECONDS: "0.5"
-      # Таймаут самого клиента СтопЛиста — БОЛЬШЕ задержки мока (2 c) и больше
-      # REQUEST_TIMEOUT_SECONDS, чтобы первым сработал общий таймаут запроса.
-      BLACK_LIST_TIMEOUT_SECONDS: "5"
     ports:
       - "8001:8000"
     depends_on:

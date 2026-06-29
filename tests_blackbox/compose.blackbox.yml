@@ -41,9 +41,8 @@ services:
       DB_PASSWORD: petbank
       DB_DATABASE: petbank_test
       BLACK_LIST_URL: http://blacklist:8090
-      # Функциональным сценариям защита от нагрузки/таймаут не должны мешать.
+      # Функциональным сценариям защита от нагрузки не должна мешать.
       RATE_LIMIT_RPS: "1000"
-      REQUEST_TIMEOUT_SECONDS: "5"
     ports:
       - "8000:8000"
     depends_on:
