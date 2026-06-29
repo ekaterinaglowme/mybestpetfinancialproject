@@ -342,7 +342,9 @@ def make_decision_v2(
 async def lifespan(app: FastAPI):
     own = db.AsyncSessionLocal is None       # в тестах уже сконфигурировано на SQLite
     if own:
-        db.configure(db.build_dsn())
+        # Пул держим выше пикового числа одновременных заявок (sim шлёт пачками),
+        # чтобы соединения переиспользовались, а не пересоздавались на каждый всплеск.
+        db.configure(db.build_dsn(), pool_size=20, max_overflow=10)
     own_bl = black_list._client is None      # в тестах клиент инжектят отдельно
     if own_bl:
         black_list.configure()
@@ -511,10 +513,9 @@ async def repay_loan(
 
 
 @app.post("/applications/v2", response_model=ApplicationDecision)
-async def create_application_v2(
-    payload: ApplicationRequestV2,
-    session: AsyncSession = Depends(get_session),
-):
+async def create_application_v2(payload: ApplicationRequestV2):
+    # Чёрный список дёргаем ДО захвата сессии БД: иначе соединение из пула держится
+    # открытым весь внешний вызов, и под залпом заявок пул копит очередь.
     try:
         in_black_list = await check_passport(payload.passport)
         check_failed = False
@@ -526,36 +527,37 @@ async def create_application_v2(
         payload, in_black_list=in_black_list, black_list_check_failed=check_failed,
     )
     try:
-        user = await get_or_create_user(
-            session,
-            last_name=payload.last_name,
-            first_name=payload.first_name,
-            middle_name=payload.middle_name,
-            birth_date=payload.birth_date,
-            phone=payload.phone,
-        )
-        await save_application(
-            session,
-            application_id=uuid.UUID(decision["application_id"]),
-            user=user,
-            amount=payload.amount,
-            country=None,
-            status=decision["status"],
-            reasons=decision["reasons"],
-            received_at=datetime.fromisoformat(decision["received_at"]),
-            email=payload.email,
-            passport=payload.passport,
-            region=payload.region,
-            loan_purpose=payload.loan_purpose,
-        )
-        # Одобрение с суммой = выдача займа (ключ — тот же application_id).
-        if decision["status"] == "approved" and payload.amount:
-            await create_loan(
+        async with db.transaction() as session:
+            user = await get_or_create_user(
+                session,
+                last_name=payload.last_name,
+                first_name=payload.first_name,
+                middle_name=payload.middle_name,
+                birth_date=payload.birth_date,
+                phone=payload.phone,
+            )
+            await save_application(
                 session,
                 application_id=uuid.UUID(decision["application_id"]),
+                user=user,
                 amount=payload.amount,
-                issued_at=date.today(),
+                country=None,
+                status=decision["status"],
+                reasons=decision["reasons"],
+                received_at=datetime.fromisoformat(decision["received_at"]),
+                email=payload.email,
+                passport=payload.passport,
+                region=payload.region,
+                loan_purpose=payload.loan_purpose,
             )
+            # Одобрение с суммой = выдача займа (ключ — тот же application_id).
+            if decision["status"] == "approved" and payload.amount:
+                await create_loan(
+                    session,
+                    application_id=uuid.UUID(decision["application_id"]),
+                    amount=payload.amount,
+                    issued_at=date.today(),
+                )
     except SQLAlchemyError as exc:
         logger.exception("Не удалось сохранить заявку %s", decision["application_id"])
         raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc

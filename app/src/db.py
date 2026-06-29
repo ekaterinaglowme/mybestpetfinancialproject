@@ -2,6 +2,7 @@
 
 import os
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -52,6 +53,22 @@ async def dispose() -> None:
 
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI-зависимость: одна транзакция на запрос (commit при успехе, rollback при ошибке)."""
+    assert AsyncSessionLocal is not None, "db.configure() не был вызван"
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            with DB_TRANSACTION_SECONDS.time():
+                await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@asynccontextmanager
+async def transaction() -> AsyncIterator[AsyncSession]:
+    """То же, что get_session, но обычный контекст-менеджер (не FastAPI-зависимость).
+    Берётся ВНУТРИ хендлера, чтобы не держать соединение из пула во время внешних
+    вызовов (напр. чёрного списка) — иначе под залпом заявок пул копит очередь."""
     assert AsyncSessionLocal is not None, "db.configure() не был вызван"
     async with AsyncSessionLocal() as session:
         try:
