@@ -1,0 +1,54 @@
+# Стенд для чёрно-ящичных интеграционных тестов.
+# Поднимает весь стек: Postgres + мок СтопЛиста + приложение из проектного
+# Dockerfile. Тесты стучатся к app по реальному HTTP на localhost:8000.
+name: petbank-blackbox
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: petbank
+      POSTGRES_PASSWORD: petbank
+      POSTGRES_DB: petbank_test
+    ports:
+      - "5432:5432"            # проброшен на хост для наката миграций (alembic)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U petbank -d petbank_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  blacklist:
+    image: python:3.13-slim
+    volumes:
+      - ./blacklist_mock.py:/mock/blacklist_mock.py:ro
+    command: python /mock/blacklist_mock.py
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  app:
+    build:
+      context: ..               # корень репозитория, где лежит Dockerfile
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: petbank
+      DB_PASSWORD: petbank
+      DB_DATABASE: petbank_test
+      BLACK_LIST_URL: http://blacklist:8090
+      # Функциональным сценариям защита от нагрузки/таймаут не должны мешать.
+      RATE_LIMIT_RPS: "1000"
+      REQUEST_TIMEOUT_SECONDS: "5"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      blacklist:
+        condition: service_healthy
+    # healthcheck (GET /health) задан в самом образе (Dockerfile).

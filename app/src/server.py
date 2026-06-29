@@ -548,6 +548,14 @@ async def create_application_v2(
             region=payload.region,
             loan_purpose=payload.loan_purpose,
         )
+        # Одобрение с суммой = выдача займа (ключ — тот же application_id).
+        if decision["status"] == "approved" and payload.amount:
+            await create_loan(
+                session,
+                application_id=uuid.UUID(decision["application_id"]),
+                amount=payload.amount,
+                issued_at=date.today(),
+            )
     except SQLAlchemyError as exc:
         logger.exception("Не удалось сохранить заявку %s", decision["application_id"])
         raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc

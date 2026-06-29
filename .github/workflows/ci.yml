@@ -1,8 +1,11 @@
 name: CI/CD
 
-# Тесты гоняются ТОЛЬКО на PR в main. На push в main их нет — повторно гонять уже
-# проверенный PR незачем. Гарантия «в main только зелёный код» держится на
-# branch protection: PR нельзя смёржить, пока job Tests не зелёный.
+# На PR проверяем ВСЁ, что можем, не экономя время: юнит-тесты (job Tests),
+# чёрно-ящичные интеграционные тесты на реальном Docker-стеке (job Integration)
+# и сборку Docker-образа (job Build Docker image, без публикации). Цель — поймать
+# невалидное изменение на этапе PR, а не после мёржа. На push в main тесты не
+# гоняем повторно. Гарантия «в main только зелёный код» держится на branch
+# protection: PR нельзя смёржить, пока обязательные jobs не зелёные.
 # Деплой на виртуалку — только при push в main (после мёржа PR). На PR деплоя нет.
 on:
   push:
@@ -30,9 +33,35 @@ jobs:
       - name: Run pytest
         run: pytest -q
 
+  integration:
+    name: Integration tests (black-box)
+    if: github.event_name == 'pull_request'   # только на PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # ubuntu-latest уже содержит Docker + docker compose v2. Тесты сами поднимут
+      # стенд (Postgres + мок СтопЛиста + app из Dockerfile), накатят схему с хоста
+      # и побьют по реальному HTTP. Каталог вне testpaths — указываем путь явно.
+      - name: Run black-box integration tests
+        run: pytest tests_blackbox/ -v
+
   docker:
     name: Build Docker image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # На PR — только сборка (проверка, что Dockerfile собирается). На push в main —
+    # сборка и публикация образа в ghcr.io.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
