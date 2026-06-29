@@ -25,13 +25,32 @@ def _make_client() -> httpx.AsyncClient:
     )
 
 
+# Один клиент на всё приложение: переиспользует keep-alive пул соединений.
+# Поднимается в configure() (в lifespan), закрывается в dispose().
+_client: httpx.AsyncClient | None = None
+
+
+def configure(client: httpx.AsyncClient | None = None) -> None:
+    """Поднять клиент чёрного списка (по умолчанию — рабочий; в тестах — инжектят)."""
+    global _client
+    _client = client if client is not None else _make_client()
+
+
+async def dispose() -> None:
+    """Закрыть клиент и сбросить модульное состояние."""
+    global _client
+    if _client is not None:
+        await _client.aclose()
+    _client = None
+
+
 async def check_passport(passport: str) -> bool:
     """True — паспорт в чёрном списке. Бросает BlackListError при любом сбое."""
+    assert _client is not None, "black_list.configure() не был вызван"
     try:
-        async with _make_client() as client:
-            with EXTERNAL_CALL_SECONDS.labels(service="black_list").time():
-                resp = await client.get("/check", params={"passport": passport})
-            resp.raise_for_status()
-            return bool(resp.json()["in_terror_list"])
+        with EXTERNAL_CALL_SECONDS.labels(service="black_list").time():
+            resp = await _client.get("/check", params={"passport": passport})
+        resp.raise_for_status()
+        return bool(resp.json()["in_terror_list"])
     except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
         raise BlackListError(str(exc)) from exc

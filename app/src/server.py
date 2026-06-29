@@ -31,6 +31,7 @@ import db
 import loans
 from db import get_session
 from repository import create_loan, get_loan, get_or_create_user, save_application
+import black_list
 from black_list import BlackListError, check_passport
 
 from logging_setup import request_id_ctx, setup_logging
@@ -342,7 +343,12 @@ async def lifespan(app: FastAPI):
     own = db.AsyncSessionLocal is None       # в тестах уже сконфигурировано на SQLite
     if own:
         db.configure(db.build_dsn())
+    own_bl = black_list._client is None      # в тестах клиент инжектят отдельно
+    if own_bl:
+        black_list.configure()
     yield
+    if own_bl:
+        await black_list.dispose()
     if own:
         await db.dispose()
 
