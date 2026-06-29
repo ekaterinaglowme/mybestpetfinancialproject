@@ -72,3 +72,16 @@ EXTERNAL_CALL_SECONDS = Histogram(
     ["service"],
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, float("inf")),
 )
+
+# Латентность вызова чёрного списка с разбивкой по фазам (сек):
+#   request  — от отправки запроса до получения заголовков ответа
+#              (сетевой round-trip + время обработки заявки сервисом);
+#   response — чтение/получение тела ответа после заголовков
+#              (отправка ответа сервисом).
+# Сумма фаз примерно равна общему petbank_external_call_seconds{service="black_list"}.
+BLACK_LIST_PHASE_SECONDS = Histogram(
+    "petbank_black_list_phase_seconds",
+    "Латентность вызова чёрного списка по фазам (сек)",
+    ["phase"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, float("inf")),
+)

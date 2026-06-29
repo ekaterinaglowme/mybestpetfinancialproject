@@ -74,6 +74,20 @@ async def test_external_call_duration_recorded():
     assert after == before + 1
 
 
+async def test_call_phases_duration_recorded():
+    # Вызов чёрного списка засекается по фазам: обработка запроса сервером
+    # (до получения заголовков ответа) и чтение тела ответа.
+    def handler(request):
+        return httpx.Response(200, json={"in_terror_list": False})
+    _use_client(handler)
+    name = "petbank_black_list_phase_seconds_count"
+    before_req = REGISTRY.get_sample_value(name, {"phase": "request"}) or 0.0
+    before_resp = REGISTRY.get_sample_value(name, {"phase": "response"}) or 0.0
+    await black_list.check_passport("888")
+    assert REGISTRY.get_sample_value(name, {"phase": "request"}) == before_req + 1
+    assert REGISTRY.get_sample_value(name, {"phase": "response"}) == before_resp + 1
+
+
 async def test_client_created_once_not_per_call(monkeypatch):
     # Клиент поднимается один раз в configure() и переиспользует пул соединений,
     # а не создаётся заново на каждый вызов check_passport.
