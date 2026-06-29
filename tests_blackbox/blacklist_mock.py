@@ -9,13 +9,17 @@
 """
 
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 # Паспорт, который мок всегда считает «в чёрном списке».
 BLACKLISTED = {"0000000000"}
 # Паспорт, на котором мок имитирует сбой сервиса (HTTP 500).
 ERROR_PASSPORTS = {"5000000000"}
+# Паспорт, на котором мок отвечает с большой задержкой (провоцирует таймаут запроса).
+SLOW_PASSPORTS = {"9999999999"}
+SLOW_DELAY_SECONDS = 2.0
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -29,6 +33,8 @@ class Handler(BaseHTTPRequestHandler):
             if passport in ERROR_PASSPORTS:
                 self._json(500, {"error": "service unavailable"})
                 return
+            if passport in SLOW_PASSPORTS:
+                time.sleep(SLOW_DELAY_SECONDS)
             self._json(200, {"in_terror_list": passport in BLACKLISTED})
             return
         self._json(404, {"error": "not found"})
@@ -46,4 +52,4 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    HTTPServer(("0.0.0.0", 8090), Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", 8090), Handler).serve_forever()

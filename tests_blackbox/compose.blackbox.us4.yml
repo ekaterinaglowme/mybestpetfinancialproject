@@ -1,0 +1,56 @@
+# Строгий стенд для US-4: низкий rate-limit и короткий таймаут запроса.
+# Отдельный проект и порты — может работать одновременно с основным стендом.
+name: petbank-blackbox-us4
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: petbank
+      POSTGRES_PASSWORD: petbank
+      POSTGRES_DB: petbank_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U petbank -d petbank_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  blacklist:
+    image: python:3.13-slim
+    volumes:
+      - ./blacklist_mock.py:/mock/blacklist_mock.py:ro
+    command: python /mock/blacklist_mock.py
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: petbank
+      DB_PASSWORD: petbank
+      DB_DATABASE: petbank_test
+      BLACK_LIST_URL: http://blacklist:8090
+      # Строгие пределы: маленький лимит и короткий таймаут запроса.
+      RATE_LIMIT_RPS: "2"
+      RATE_LIMIT_BURST: "2"
+      REQUEST_TIMEOUT_SECONDS: "0.5"
+      # Таймаут самого клиента СтопЛиста — БОЛЬШЕ задержки мока (2 c) и больше
+      # REQUEST_TIMEOUT_SECONDS, чтобы первым сработал общий таймаут запроса.
+      BLACK_LIST_TIMEOUT_SECONDS: "5"
+    ports:
+      - "8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      blacklist:
+        condition: service_healthy
