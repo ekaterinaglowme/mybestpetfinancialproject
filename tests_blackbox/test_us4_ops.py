@@ -71,10 +71,14 @@ def test_dolgiy_zapros_obryvaetsya_503(strict_base_url):
         "loan_purpose": "покупка",
         "amount": 1000,
     }
-    # На строгом стенде rate limiter (RATE_LIMIT_RPS=2) общий для /applications и
-    # /applications/v2 — предыдущий тест (test_rate_limit_otdaet_429) истощает токены.
-    # Дожидаемся восстановления хотя бы 1 токена (capacity=2, rps=2 -> до 1с), чтобы
-    # запрос дошёл до таймаут-предохранителя, а не отсёкся 429 раньше времени.
-    time.sleep(1.0)
+    # Строгий стенд делит один rate-limiter между тестами (общий TokenBucket на
+    # /applications и /applications/v2), поэтому соседний тест мог осушить бакет.
+    # Не угадываем тайминг через фиксированный sleep, а повторяем запрос, пока он
+    # не пройдёт rate-limiter (перестанет быть 429), и только тогда проверяем,
+    # что сработал предохранитель-таймаут.
+    deadline = time.time() + 15
     r = httpx.post(f"{strict_base_url}/applications/v2", json=payload, timeout=10)
+    while r.status_code == 429 and time.time() < deadline:
+        time.sleep(0.5)
+        r = httpx.post(f"{strict_base_url}/applications/v2", json=payload, timeout=10)
     assert r.status_code == 503, r.text
