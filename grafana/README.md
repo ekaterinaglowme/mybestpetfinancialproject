@@ -9,6 +9,7 @@
 |---|---|---|
 | `dashboards/petbank-business.json` | **PetBank — бизнес-метрики** (решения, одобрение, страны, причины отказов, суммы, HTTP по эндпоинтам, логи) | `petbank-business` |
 | `provisioning/alerting/petbank-up.yaml` | **Алерт «PetBank недоступен»** — Grafana-managed rule на `up{job="petbank"} == 0` | `petbank-up-down` |
+| `provisioning/alerting/petbank-host.yaml` | **Алерт «Мало места на диске VM»** — `< 15%` на `/` (требует node_exporter) | `petbank-disk-low` |
 
 > Пай-чарты «Доля стран / Причины отказов» считаются через `increase(...[$__range])`
 > — итог за выбранный период, а не накопленный с момента старта процесса. Поэтому
@@ -66,6 +67,19 @@ curl -u <admin>:<pass> -H "X-Grafana-Org-Id: 3" -H "Content-Type: application/ya
   -X POST http://<grafana-host>:3000/api/v1/provisioning/alert-rules \
   --data-binary @grafana/provisioning/alerting/petbank-up.yaml
 ```
+
+## Алерт «Мало места на диске VM» (`< 15%` на `/`)
+
+`provisioning/alerting/petbank-host.yaml` — предупреждает, когда на корневой ФС VM
+остаётся мало места, **до** того как всё ляжет. Именно переполнение диска уронило
+дашборды 2026-06-30 (Prometheus не мог писать TSDB), а `up == 0` этот случай не ловит —
+приложение оставалось живо.
+
+> ⚠️ **Требует node_exporter.** Метрики `node_filesystem_*` отдаёт он. Если на VM его
+> нет или Prometheus его не скрейпит — правило останется в `NoData` и работать не будет.
+> Проверка: в Prometheus query `node_filesystem_avail_bytes` должен что-то вернуть; если
+> пусто — поднять node_exporter (обычно `:9100`) и добавить target в `prometheus.yml`
+> (мониторинг-стек живёт на VM вне этого репозитория). Применение — как у `petbank-up.yaml`.
 
 > **Чтобы реально приходило уведомление** (а не только Firing в Alerting UI),
 > правилу нужен contact point + notification policy. По умолчанию алерт уйдёт в

@@ -1,0 +1,86 @@
+# Grafana-managed alert: мало места на диске VM.
+#
+# ЗАЧЕМ. Инцидент 2026-06-30 «упал весь дашборд» был вызван НЕ кодом и НЕ деплоем,
+# а переполнением диска на VM: Prometheus не мог писать TSDB → дыра по всем панелям.
+# Алерт up==0 такой случай НЕ ловит (приложение оставалось живо). Этот — ловит:
+# предупреждает, когда свободного места на корне `/` остаётся мало, ДО того как всё ляжет.
+#
+# ⚠️ ЗАВИСИМОСТЬ: метрики node_filesystem_* отдаёт node_exporter. Если на VM его нет
+# или Prometheus его не скрейпит — серий не будет, и правило останется в NoData
+# (см. noDataState ниже), т.е. по факту работать НЕ будет. Проверить:
+#   - в Prometheus (на VM): query `node_filesystem_avail_bytes` должен что-то вернуть;
+#   - если пусто — поднять node_exporter и добавить его target в prometheus.yml
+#     (node_exporter обычно на :9100; мониторинг-стек живёт на VM вне этого репозитория).
+#
+# Порог: предупреждение, когда на `/` остаётся < 15% свободного места. Даёт запас по
+# времени отреагировать (почистить docker images/volumes, логи, старый TSDB).
+# Датасорс Prometheus = prom-3, orgId 3 («Katya») — как в дашборде и в petbank-up.yaml.
+apiVersion: 1
+
+groups:
+  - orgId: 3
+    name: petbank-host
+    interval: 1m
+    folder: PetBank
+    rules:
+      - uid: petbank-disk-low
+        title: Мало места на диске VM (< 15% на /)
+        condition: C
+        data:
+          # A — процент свободного места на корневой ФС (исключаем виртуальные ФС).
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prom-3
+            model:
+              refId: A
+              editorMode: code
+              expr: >-
+                100 * node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs|ramfs"}
+                / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs|ramfs"}
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          # B — последнее значение.
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          # C — тревога, если свободно < 15%.
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [15]
+        # Нет данных — НЕ паникуем (вероятно, node_exporter не настроен). Это
+        # отличается от petbank-up.yaml: там отсутствие up == падение; здесь
+        # отсутствие node_* == «не настроен экспортер», а не «диск кончился».
+        noDataState: NoData
+        execErrState: OK
+        # Держим 5 минут, чтобы не дёргаться на коротких всплесках.
+        for: 5m
+        labels:
+          severity: warning
+          service: petbank
+        annotations:
+          summary: На VM PetBank остаётся < 15% свободного места на /.
+          description: >-
+            Свободное место на корневой ФС VM (212.147.238.3) ниже 15%. Если добьётся
+            до нуля — Prometheus перестанет писать метрики и дашборды «упадут» (как
+            2026-06-30). Почисти: docker image prune -af, docker system df, старые
+            логи и TSDB. NB: правило требует node_exporter — см. petbank-host.yaml.
