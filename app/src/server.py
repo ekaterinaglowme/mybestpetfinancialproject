@@ -181,11 +181,20 @@ class LoanStatus(BaseModel):
     application_id: str
     amount: float
     issued_at: date
-    status: str               # «отдал» / «не отдал»
+    status: str               # выдано / вернули / не вернули / ошибка
     days_elapsed: int
     current_rate: float
     amount_owed: float
     repaid_at: date | None = None
+
+
+class RepayRequest(BaseModel):
+    """Тело /loans/{id}/repay — фиксация исхода. По умолчанию «вернули» сегодня.
+
+    `ошибка` оператором не принимается — это системный статус.
+    """
+    outcome: Literal["вернули", "не вернули"] = "вернули"
+    repaid_at: date | None = None  # только для «вернули»; пусто = сегодня
 
 
 # --- Бизнес-логика ---------------------------------------------------------
@@ -371,27 +380,67 @@ async def get_loan_status(
     if loan is None:
         raise HTTPException(status_code=404, detail="Заём не найден")
     return loans.loan_view(
-        application_id=loan.application_id, amount=loan.amount,
+        application_id=loan.application_id, amount=loan.amount, status=loan.status,
         issued_at=loan.issued_at, repaid_at=loan.repaid_at, today=date.today(),
     )
+
+
+async def _mark_loan_error(application_id: uuid.UUID) -> None:
+    """Best-effort: пометить заём статусом «ошибка» отдельной транзакцией.
+
+    Если БД недоступна целиком — записать не выйдет; это принятое ограничение
+    (статус сам себя при полном отказе БД зафиксировать не может), а не баг.
+    """
+    try:
+        async with db.transaction() as s:
+            loan = await get_loan(s, application_id)
+            if loan is not None:
+                loan.status = "ошибка"
+    except SQLAlchemyError:
+        logger.exception("Не удалось записать «ошибка» для займа %s", application_id)
 
 
 @app.post("/loans/{application_id}/repay", response_model=LoanStatus)
 async def repay_loan(
     application_id: uuid.UUID,
+    body: RepayRequest | None = None,
     session: AsyncSession = Depends(get_session),
 ):
+    req = body or RepayRequest()
     loan = await get_loan(session, application_id)
     if loan is None:
         raise HTTPException(status_code=404, detail="Заём не найден")
-    if loan.repaid_at is not None:
-        raise HTTPException(status_code=409, detail="Заём уже отдан")
-    loan.repaid_at = date.today()
-    with DB_WRITE_SECONDS.labels(operation="repay").time():
-        await session.flush()
+    if loan.status != "выдано":
+        raise HTTPException(status_code=409, detail="Заём уже закрыт")
+
+    today = date.today()
+    if req.outcome == "вернули":
+        repaid_at = req.repaid_at or today
+        if repaid_at < loan.issued_at:
+            raise HTTPException(status_code=422, detail="Дата возврата раньше даты выдачи")
+        if repaid_at > today:
+            raise HTTPException(status_code=422, detail="Дата возврата не может быть в будущем")
+        loan.status = "вернули"
+        loan.repaid_at = repaid_at
+    else:  # «не вернули» — денег не было, дата возврата неприменима
+        if req.repaid_at is not None:
+            raise HTTPException(
+                status_code=422, detail="У «не вернули» не может быть даты возврата"
+            )
+        loan.status = "не вернули"
+
+    try:
+        with DB_WRITE_SECONDS.labels(operation="repay").time():
+            await session.flush()
+    except SQLAlchemyError as exc:
+        logger.exception("Сбой фиксации исхода займа %s — помечаю «ошибка»", application_id)
+        await _mark_loan_error(application_id)
+        raise HTTPException(
+            status_code=500, detail="Не удалось зафиксировать исход"
+        ) from exc
     return loans.loan_view(
-        application_id=loan.application_id, amount=loan.amount,
-        issued_at=loan.issued_at, repaid_at=loan.repaid_at, today=date.today(),
+        application_id=loan.application_id, amount=loan.amount, status=loan.status,
+        issued_at=loan.issued_at, repaid_at=loan.repaid_at, today=today,
     )
 
 

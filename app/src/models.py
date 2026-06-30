@@ -3,7 +3,8 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import ForeignKey, Numeric, String, UniqueConstraint, func
+from sqlalchemy import (CheckConstraint, ForeignKey, Numeric, String,
+                        UniqueConstraint, func)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON, Date, DateTime, Uuid
@@ -64,6 +65,12 @@ class Loan(Base):
     """Выданный заём: заводится при одобрении заявки с суммой. Ключ — application_id."""
 
     __tablename__ = "loans"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('выдано', 'вернули', 'не вернули', 'ошибка')",
+            name="ck_loan_status",
+        ),
+    )
 
     application_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("applications.application_id"), primary_key=True
@@ -71,3 +78,8 @@ class Loan(Base):
     amount: Mapped[float] = mapped_column(Numeric(12, 2))
     issued_at: Mapped[date] = mapped_column(Date)
     repaid_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Статус для аналитики (хранится, не вычисляется): выдано → вернули / не вернули
+    # / ошибка. Дефолт «выдано» проставляется при создании займа.
+    status: Mapped[str] = mapped_column(
+        String, default="выдано", server_default="выдано",
+    )

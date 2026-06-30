@@ -15,6 +15,8 @@ async def test_create_and_get_loan(db_session):
     assert float(loan.amount) == 50000.0
     assert loan.issued_at == date(2026, 6, 1)
     assert loan.repaid_at is None
+    # Новый заём по умолчанию «выдано» — статус для аналитики проставляется сам.
+    assert loan.status == "выдано"
 
 
 async def test_get_unknown_loan_returns_none(db_session):
