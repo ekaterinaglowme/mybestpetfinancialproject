@@ -145,12 +145,18 @@ class ApplicationRequest(ApplicationBase):
         }
     })
 
-    country: str
+    country: str | None = None
 
     @field_validator("country", mode="before")
     @classmethod
-    def _v_country(cls, v: object) -> str:
-        return _strip_required_nonempty(v)
+    def _v_country(cls, v: object) -> "str | None":
+        # Необязательное поле: отсутствие / null / пустая строка → None
+        # («страна не указана»); иначе строка без пробелов по краям.
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("Должно быть строкой или отсутствовать")
+        return v.strip() or None
 
 
 class ApplicationRequestV2(ApplicationBase):
@@ -232,7 +238,8 @@ def make_decision(payload: ApplicationRequest) -> dict:
 
     logger.info(
         "Заявка %s: %s %s, возраст %d, страна %s",
-        application_id, payload.last_name, payload.first_name, age, payload.country,
+        application_id, payload.last_name, payload.first_name, age,
+        payload.country or "не указана",
     )
 
     reasons = []
@@ -246,14 +253,15 @@ def make_decision(payload: ApplicationRequest) -> dict:
         reasons.append(reason)
         REJECTION_REASONS.labels(reason="age_above_max").inc()
         logger.info("Заявка %s — отказ: %s", application_id, reason)
-    if payload.country.lower() in BLOCKED_COUNTRIES:
+    if payload.country and payload.country.lower() in BLOCKED_COUNTRIES:
         reason = f"Заявки из страны «{payload.country}» не принимаются"
         reasons.append(reason)
         REJECTION_REASONS.labels(reason="blocked_country").inc()
         logger.info("Заявка %s — отказ: %s", application_id, reason)
 
     status = "approved" if not reasons else "declined"
-    DECISIONS.labels(status=status, country=payload.country.strip().lower()).inc()
+    country_label = payload.country.lower() if payload.country else "не указана"
+    DECISIONS.labels(status=status, country=country_label).inc()
     if payload.amount is not None:
         APPLICATION_AMOUNT_RUB.observe(payload.amount)
     logger.info(

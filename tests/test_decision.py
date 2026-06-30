@@ -63,7 +63,7 @@ def test_request_body_not_dict():
         ApplicationRequest.model_validate(["not", "a", "dict"])
 
 
-@pytest.mark.parametrize("field", ["last_name", "first_name", "phone", "country"])
+@pytest.mark.parametrize("field", ["last_name", "first_name", "phone"])
 def test_request_required_string_missing(field):
     data = {
         "last_name": "Иванов",
@@ -77,7 +77,7 @@ def test_request_required_string_missing(field):
         ApplicationRequest.model_validate(data)
 
 
-@pytest.mark.parametrize("field", ["last_name", "first_name", "phone", "country"])
+@pytest.mark.parametrize("field", ["last_name", "first_name", "phone"])
 def test_request_required_string_blank(field):
     with pytest.raises(Exception):
         _valid_request(**{field: "   "})
@@ -147,6 +147,37 @@ def test_request_birth_date_accepts_date_object():
 def test_request_country_not_string_rejected():
     with pytest.raises(Exception):
         _valid_request(country=123)
+
+
+# --- country: необязательное поле (обратная совместимость) -----------------
+
+def test_request_country_optional():
+    # Старый клиент не присылает country — заявка валидна, country = None.
+    req = ApplicationRequest.model_validate({
+        "last_name": "Иванов",
+        "first_name": "Иван",
+        "phone": "+79991234567",
+        "birth_date": "2000-05-15",
+    })
+    assert req.country is None
+
+
+def test_request_country_explicit_null():
+    # Явный null трактуется как «страна не указана».
+    req = _valid_request(country=None)
+    assert req.country is None
+
+
+def test_request_country_blank_becomes_none():
+    # Пустая/пробельная строка для необязательного поля → None, а не ошибка.
+    req = _valid_request(country="   ")
+    assert req.country is None
+
+
+def test_request_country_stripped():
+    # Непустая строка очищается от пробелов по краям (сохраняем поведение).
+    req = _valid_request(country="  Россия  ")
+    assert req.country == "Россия"
 
 
 def test_request_amount_optional():
@@ -249,3 +280,17 @@ def test_decision_blocked_country_case_insensitive():
     born = date.today().replace(year=date.today().year - 30)
     result = make_decision(_valid_decision_request(born, country="китай"))
     assert result["status"] == "declined"
+
+
+def test_decision_no_country_approved():
+    # Заявка без страны: страновой стоп-лист пропускается, решение — по возрасту.
+    born = date.today().replace(year=date.today().year - 30)
+    req = ApplicationRequest(
+        last_name="Иванов",
+        first_name="Иван",
+        phone="+79991234567",
+        birth_date=born,
+    )
+    result = make_decision(req)
+    assert result["status"] == "approved"
+    assert result["reasons"] == []

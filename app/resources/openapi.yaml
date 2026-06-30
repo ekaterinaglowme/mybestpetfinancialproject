@@ -82,7 +82,7 @@ components:
   schemas:
     ApplicationRequest:
       type: object
-      required: [last_name, first_name, phone, birth_date, country]
+      required: [last_name, first_name, phone, birth_date]
       properties:
         last_name:
           type: string
@@ -107,7 +107,8 @@ components:
           example: "2000-05-15"
         country:
           type: string
-          description: Страна заявителя. Заявки из стран из стоп-листа (по умолчанию "Китай") отклоняются.
+          nullable: true
+          description: Страна заявителя (необязательно). Если не указана — проверка стоп-листа стран пропускается. Заявки из стран стоп-листа (по умолчанию "Китай") отклоняются.
           example: Россия
         amount:
           type: number

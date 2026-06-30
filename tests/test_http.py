@@ -96,3 +96,30 @@ async def test_application_invalid_json(async_client):
 async def test_unknown_path_404(async_client):
     resp = await async_client.get("/nope")
     assert resp.status_code == 404
+
+
+def _adult_payload_no_country():
+    born = date.today().replace(year=date.today().year - 30)
+    return {
+        "last_name": "Иванов",
+        "first_name": "Иван",
+        "phone": "+79991234567",
+        "birth_date": born.isoformat(),
+    }
+
+
+async def test_application_without_country_approved(async_client):
+    # Обратная совместимость: старый клиент шлёт только базовые поля, без country.
+    resp = await async_client.post("/applications", json=_adult_payload_no_country())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "approved"
+    assert body["reasons"] == []
+
+
+async def test_country_known_but_optional_in_openapi(async_client):
+    # country известно схеме API, но не обязательно.
+    schema = (await async_client.get("/openapi.json")).json()
+    model = schema["components"]["schemas"]["ApplicationRequest"]
+    assert "country" in model["properties"]
+    assert "country" not in model.get("required", [])
