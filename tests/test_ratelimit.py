@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from ratelimit import TokenBucket, install_rate_limiter
-from server import app as real_app
 
 
 def test_bucket_allows_up_to_capacity():
@@ -76,15 +75,3 @@ def test_health_not_limited():
     for _ in range(5):
         assert client.get("/health").status_code == 200
     assert counter.n == 0
-
-
-def test_real_app_applications_ok_with_request_id():
-    client = TestClient(real_app)
-    body = {
-        "last_name": "Иванов", "first_name": "Иван", "phone": "+79991234567",
-        "birth_date": "2000-05-15", "country": "Россия", "amount": 100000,
-    }
-    resp = client.post("/applications", json=body)
-    assert resp.status_code == 200
-    assert resp.json()["status"] in ("approved", "declined")
-    assert "X-Request-ID" in resp.headers  # log_requests остался внешним

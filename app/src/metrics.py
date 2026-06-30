@@ -41,11 +41,11 @@ _VERSION = os.environ.get("APP_VERSION") or (
 APP_INFO = Info("petbank_app", "Версия и коммит приложения PetBank")
 APP_INFO.info({"version": _VERSION, "commit": _COMMIT})
 
-# --- Защита /applications под нагрузкой ---
+# --- Защита /applications/v2 под нагрузкой ---
 # Запросы, отклонённые rate limiter (429).
 RATE_LIMITED = Counter(
     "petbank_rate_limited_total",
-    "Запросы к /applications, отклонённые rate limiter (429)",
+    "Запросы к /applications/v2, отклонённые rate limiter (429)",
 )
 
 # --- Латентность записи в БД и обращений к внешним сервисам ---
