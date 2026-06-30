@@ -1,169 +1,183 @@
-# 🧭 Состояние проекта PetBank
+# 🧭 PetBank — как всё работает (статус)
 
-Где проект сейчас, как он сюда пришёл, что в ветках, что недоделано и куда расти.
-Это «карта местности» после паузы — чтобы быстро понять, что происходит.
+Актуальный технический и бизнес-снимок системы. Источник правды — боевой код на
+`origin/main` (то, что задеплоено на VM). Для ежедневной выгрузки в PDF см.
+[`docs/status/`](status/README.md).
+
+> Обновлено по коду `origin/main`. Если читаешь после паузы — сверься с `git log origin/main`.
 
 Содержание:
 
-1. [Что сейчас на `main` (коротко)](#1-что-сейчас-на-main-коротко)
-2. [История проекта (как развивался)](#2-история-проекта-как-развивался)
-3. [Карта веток](#3-карта-веток)
-4. [Локальная папка vs `main`](#4-локальная-папка-vs-main)
-5. [Известные пробелы и техдолг](#5-известные-пробелы-и-техдолг)
-6. [Куда расти (roadmap)](#6-куда-расти-roadmap)
+1. [Бизнес: что это и зачем](#1-бизнес-что-это-и-зачем)
+2. [Архитектура и поток запроса](#2-архитектура-и-поток-запроса)
+3. [Тайминги, пороги, лимиты](#3-тайминги-пороги-лимиты)
+4. [Метрики на /metrics](#4-метрики-на-metrics)
+5. [Инфраструктура и деплой](#5-инфраструктура-и-деплой)
+6. [Мониторинг и алерты](#6-мониторинг-и-алерты)
+7. [Честные пробелы](#7-честные-пробелы)
 
 ---
 
-## 1. Что сейчас на `main` (коротко)
+## 1. Бизнес: что это и зачем
 
-`main` — это **рабочая, задеплоенная версия**. На ней есть всё:
+PetBank — микросервис **приёма кредитных заявок и выдачи микрозаймов** (учебный стенд).
+Жизненный цикл:
 
-- ✅ FastAPI + Uvicorn, Pydantic-валидация, Swagger UI на `/docs`;
-- ✅ бизнес-правила: возраст 18–35, стоп-лист стран (Китай);
-- ✅ JSON-логирование в stdout + `request_id` на каждый запрос;
-- ✅ Prometheus-метрики на `/metrics` (HTTP + бизнес);
-- ✅ Docker-образ + авто-деплой на VM через GitHub Actions (`docker run`);
-- ✅ 4 набора тестов (логика, HTTP, логи, метрики).
+1. Клиент шлёт заявку → сервис принимает **решение** `approved` / `declined`.
+2. Если одобрено **и указана сумма** → автоматически **выдаётся заём** (тот же `application_id`).
+3. По займу можно смотреть **статус и текущий долг** и **гасить** его.
 
-Последний релиз на `main`: **Prometheus-метрики** (коммит `3940a62`).
+**Бизнес-правила решения** (для одобрения нужны обе проверки):
 
----
-
-## 2. История проекта (как развивался)
-
-Проект рос итерациями. Для каждой крупной фичи есть спека и план в
-`docs/superpowers/` — это «проектные документы», по которым делалась работа.
-
-```
- stdlib            FastAPI          Pydantic         Docker          JSON-логи        Метрики
- http.server  ──►  + правила   ──►  + Swagger   ──►  контейнер  ──►  + request_id ──► /metrics
- (возраст≥18)      возраст/страна   (валидация)      + деплой        (middleware)     (Prometheus)
-     │                 │                 │               │               │               │
-     start         06-15            06-16           cf7a09f          06-18           3940a62
-                                                  + docker-run                       ← main сейчас
-                                                    (0751935)
-```
-
-| Этап | Что добавилось | Артефакты |
+| Правило | Деталь | Причина отказа (метрика) |
 |---|---|---|
-| **0. Старт** | Сервер на голой stdlib (`http.server`), одно правило «возраст ≥ 18», тесты, CI с деплоем через rsync + systemd | — |
-| **1. FastAPI + правила** (06-15) | Правило `MAX_AGE = 35`, обязательное поле `country` со стоп-листом, миграция `http.server` → FastAPI+Uvicorn (тонкая обёртка) | `specs/2026-06-15-fastapi-age-country-rules-design.md`, `plans/2026-06-15-…` |
-| **2. Pydantic + Swagger** (06-16) | Ручная валидация → Pydantic-модели, авто Swagger UI на `/docs`; формат ошибок `400 → 422` | `specs/2026-06-16-swagger-ui-pydantic-design.md`, `plans/2026-06-16-…` |
-| **3. Логирование решений** | Текстовые бизнес-логи в `make_decision` | PR `feat/decision-logging` |
-| **4. Docker** | `Dockerfile`, сборка образа в CI, публикация в `ghcr.io` | коммит `cf7a09f` |
-| **5. Деплой через docker run** | Уход от systemd: `docker run --restart unless-stopped`; удалены systemd-юнит и sudoers | коммит `0751935` |
-| **6. JSON-логирование** (06-18) | `logging_setup.py` (JsonFormatter, `request_id` через ContextVar), middleware логирования HTTP-запросов, `X-Request-ID` | `specs/2026-06-18-json-request-logging-design.md` |
-| **7. Лимиты контейнера** | `--memory=512m --cpus=0.5` в деплое | коммит `3ec471b` |
-| **8. Prometheus-метрики** (06-18) | `metrics.py`, `/metrics`, instrumentator, build-info | `specs/2026-06-18-prometheus-metrics-design.md` |
+| Возраст | `≥ 18` лет (`MIN_AGE`) | `age_below_min` |
+| Чёрный список паспортов | паспорт **не** в стоп-листе (внешний сервис СтопЛист) | `black_list` |
+| Доступность проверки | СтопЛист недоступен → **fail-closed** (отказ) | `black_list_check_unavailable` |
 
-> Спека (`specs/`) = «что и почему делаем». План (`plans/`) = «по шагам, как
-> делаем, с тестами». Это лучший источник, чтобы понять **мотивацию** каждой фичи.
+**Заём — дисконтная ставка** (дольше держишь — ниже % к телу):
 
----
+| Возраст займа | Ставка к телу |
+|---|---|
+| 0–7 дней | **10%** |
+| 8–30 дней | **5%** |
+| > 30 дней | **2%** |
 
-## 3. Карта веток
-
-```bash
-git branch -a          # все ветки
-git worktree list      # рабочие копии веток
-```
-
-### Влито в `main`
-- `main` — основная, актуальная.
-- `feat/decision-logging` — влита.
-- Работа из остальных фич (FastAPI, Pydantic, Docker, docker-run, JSON-логи,
-  метрики) **тоже уже в `main`** — она попала туда через серию коммитов/PR.
-
-### Worktree-ветки (`.claude/worktrees/`)
-- `worktree-feat+json-request-logging`
-- `worktree-feat+metrics`
-
-Их содержимое **совпадает с тем, что уже на `main`** (проверено: `server.py` в
-`worktree-feat+metrics` идентичен `main`). То есть это **доделанная, уже влитая
-работа** — worktree остались как «хвосты». Их можно убрать:
-
-```bash
-git worktree remove .claude/worktrees/feat+metrics
-git worktree remove .claude/worktrees/feat+json-request-logging
-```
-
-### Старые feature-ветки (не влиты «как есть», но их работа в `main`)
-`add-old-age-condition`, `feat/app-structure`, `feat/docker-copy-all`,
-`feat/pydantic-swagger`, `feat/deploy-docker-run` — это **исторические ветки**.
-Их изменения уже интегрированы в `main` другими коммитами, сами ветки —
-устаревшие. Безопасно удалить (после того как убедишься, что не нужны):
-
-```bash
-git branch -d <ветка>     # -d не даст удалить неслитое; -D — форсом
-```
-
-> Прежде чем массово чистить ветки — убедись, что в них нет уникальной
-> незакоммиченной идеи. Судя по диффам, всё ценное уже в `main`.
+Долг = `тело × (1 + ставка)`. Цель займа (`loan_purpose`) — только `покупка` или `перекредитование`.
 
 ---
 
-## 4. Локальная папка vs `main`
+## 2. Архитектура и поток запроса
 
-🔴 **Сейчас твоя рабочая папка переключена на `feat/deploy-docker-run` — это
-снимок «до JSON-логов и метрик».** Поэтому локальные `server.py`, `Dockerfile`,
-`ci.yml`, `CLAUDE.md` отличаются от `main`.
+**Стек:** FastAPI + Uvicorn, Python 3.14-slim, Pydantic-валидация, SQLAlchemy async +
+asyncpg, PostgreSQL 16, httpx. Всё в Docker под непривилегированным `appuser`.
 
-Что есть локально, но **не** в git (твои незакоммиченные эксперименты):
-- `docker-compose.yml` — поднимает PostgreSQL 16. Приложение БД **не использует**;
-  это задел на будущее. Файла нет на `main`.
-- `.env`, `.env.example` — переменные для Postgres-compose. Не в git.
-- правки в `CLAUDE.md` (локально добавлена строка про запрет merge-коммитов).
+**Эндпоинты:**
 
-**Рекомендация:** перейти на `main`, чтобы видеть актуальный код (сначала сохрани
-эксперименты):
+| Метод / путь | Что делает |
+|---|---|
+| `POST /applications/v2` | подать заявку → решение (v1 удалён в #39) |
+| `GET /loans/{id}` | статус и текущий долг займа |
+| `POST /loans/{id}/repay` | погасить заём (409, если уже отдан) |
+| `GET /health` | жив ли сервис |
+| `GET /` · `GET /docs` | справка · Swagger UI |
+| `GET /metrics` | Prometheus-метрики |
 
-```bash
-git stash                       # или git add -A && git commit -m "wip: эксперименты"
-git checkout main
-git pull origin main
-git stash pop                   # если прятала
+**Поток обработки заявки** (порядок не случаен):
+
+```
+запрос → [middleware: rate limit] → [middleware: JSON-лог + request_id]
+   → Pydantic-валидация (иначе 422)
+   → 1) ЧЁРНЫЙ СПИСОК (внешний вызов) — ДО открытия сессии БД
+   → 2) make_decision_v2 (возраст + чёрный список) → approved/declined + метрики
+   → 3) ОДНА транзакция БД:
+        get_or_create_user → save_application → (если approved+amount) create_loan
+   → ответ
 ```
 
-Если `docker-compose.yml`/`.env.example` нужны — закоммить их отдельной веткой,
-чтобы не потерять.
+Ключевой приём: **чёрный список дёргается до захвата соединения из пула БД** — иначе под
+залпом заявок соединение висело бы открытым весь внешний вызов и пул копил бы очередь.
+Запись в БД — **одной транзакцией** (commit при успехе, rollback при ошибке → 500
+`Ошибка сохранения заявки`).
+
+**Данные (PostgreSQL):**
+
+- `users` — идемпотентность по `UniqueConstraint(ФИО + ДР + телефон)` → один человек не плодит дубли.
+- `applications` (1:N к user) — сумма, статус, причины (JSONB), ПДн заявки v2.
+- `loans` — заём по `application_id`: тело, дата выдачи, дата возврата.
 
 ---
 
-## 5. Известные пробелы и техдолг
+## 3. Тайминги, пороги, лимиты
 
-Не баги, но стоит держать в голове:
+| Параметр | Значение | env-override | Где |
+|---|---|---|---|
+| Мин. возраст | **18 лет** | — | `server.py` `MIN_AGE` |
+| **Таймаут чёрного списка** | **0.8 с** | `BLACK_LIST_TIMEOUT_SECONDS` | `black_list.py` |
+| URL чёрного списка | `http://212.147.238.3:8090` | `BLACK_LIST_URL` | `black_list.py` |
+| **Пул БД** | size **20** + overflow **10** (=до 30) | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `db.py` |
+| **Ожидание соединения из пула** | **5 с** | `DB_POOL_TIMEOUT_SECONDS` | `db.py` |
+| **Таймаут одного SQL** | **5 с** | `DB_COMMAND_TIMEOUT_SECONDS` | `db.py` |
+| pre-ping соединений | вкл | — | `db.py` |
+| **Rate limit** | **100 rps**, burst **100** → 429 + `Retry-After` | `RATE_LIMIT_RPS` / `_BURST` | `server.py` |
+| Тело запроса в лог | до **10240 байт** | — | `server.py` |
+| **Docker healthcheck** | interval **30s**, timeout **3s**, start **5s**, retries **3** | — | `Dockerfile` |
+| Лимиты контейнера | **512 МБ** RAM, **0.5** CPU | — | CI deploy |
+| Пауза перед health после деплоя | **10 с** | — | `ci.yml` |
 
-| Тема | Суть | Где |
+---
+
+## 4. Метрики на /metrics
+
+**HTTP (авто, prometheus-fastapi-instrumentator):** `http_requests_total{handler,status}`,
+`http_request_duration_seconds_*` — RED по ручкам.
+
+**Бизнес-метрики (`metrics.py`):**
+
+| Метрика | Тип | Лейблы / детали |
 |---|---|---|
-| **README отстаёт** | Таблица эндпоинтов не упоминает `/docs` и `/metrics`; «Файлы» не упоминают `logging_setup.py`/`metrics.py`; написано «Python 3.8+» (на деле 3.10+) | `README.md` |
-| **`openapi.yaml` отстаёт** | Описывает старый формат ошибок `400` (`ErrorResponse`), хотя сейчас `422`; нет `/metrics`. Это legacy для Postman | `openapi.yaml` |
-| **ПДн в логах** | Тело заявки (ФИО, телефон, ДР) пишется в лог открытым текстом — осознанно. Нужен ограниченный доступ/срок хранения, опц. маскирование | `server.py` middleware |
-| **Plaintext HTTP** | `0.0.0.0:8000` без TLS. В проде — nginx + TLS | деплой |
-| **`/metrics` без auth** | Так задумано (внутренний скрейп), но не должен торчать в интернет | `server.py` |
-| **`docker` = root** | Деплой-аккаунт фактически рутовый на VM | `deploy/README.md` |
-| **Postgres не подключён** | `docker-compose.yml` есть, но приложение БД не использует и файл не в git | локально |
-| **Стейл-ветки/worktree** | Несколько устаревших веток и 2 worktree, чья работа уже в `main` | git |
+| `petbank_decisions_total` | counter | `status` (approved/declined), `country` (сейчас `-`) |
+| `petbank_rejection_reasons_total` | counter | `reason`: age_below_min / black_list / black_list_check_unavailable |
+| `petbank_application_amount_rub` | histogram | бакеты 10k · 50k · 100k · 250k · 500k · 1M · ∞ |
+| `petbank_rate_limited_total` | counter | заявки, отбитые лимитером (429) |
+| `petbank_db_write_seconds` | histogram | `operation` (напр. `repay`) |
+| `petbank_db_transaction_seconds` | histogram | время commit на запрос |
+| `petbank_external_call_seconds` | histogram | `service` (`black_list`), бакеты до ~0.8 с |
+| `petbank_black_list_phase_seconds` | histogram | `phase`: request / response (две фазы вызова) |
+| `petbank_app_info` | info | `version`, `commit` (из CI build-arg) |
 
 ---
 
-## 6. Куда расти (roadmap)
+## 5. Инфраструктура и деплой
 
-Идеи на будущее (не обязательства, а направления):
+**VM `212.147.238.3` — всё на одной машине:** app `:8000`, Postgres `:5432`,
+Prometheus `:9090` (закрыт фаерволом), Grafana `:3000`, Loki. Снаружи открыты только
+`22 / 8000 / 3000`. Диск — общий бутылочник (его переполнение уронило дашборды 2026-06-30).
 
-- **Сохранение заявок в БД.** Postgres уже намечен в `docker-compose.yml` —
-  подключить (например, через SQLAlchemy), сохранять решения, добавить эндпоинт
-  истории. Это превратит сервис из stateless в полноценный.
-- **Маскирование ПДн** в access-логах (одно место — сборка поля `body` в
-  middleware).
-- **TLS + reverse-proxy** (nginx) перед сервисом на проде.
-- **Branch protection** на `main`: «Require status checks → Tests».
-- **Привести в актуальное состояние `README.md` и `openapi.yaml`** (или вовсе
-  отказаться от ручного `openapi.yaml` в пользу авто-схемы FastAPI).
-- **Новые бизнес-правила** — по [чек-листу](CHECKLISTS.md#-добавить-или-изменить-бизнес-правило)
-  (минимальная сумма, расширение стоп-листа, проверка телефона форматом и т.п.).
-- **Чистка веток и worktree** — убрать устаревшее (см. [раздел 3](#3-карта-веток)).
+**CI/CD (GitHub Actions):**
+
+- **PR в main:** `Tests` (pytest) + `Integration` (blackbox на реальном Docker-стеке) +
+  `Build` (сборка образа без публикации).
+- **Push в main:** сборка → публикация образа в `ghcr.io` → **деплой на VM** по SSH:
+  `docker pull` + пересоздание контейнера
+  (`--restart unless-stopped --memory=512m --cpus=0.5 -p 8000:8000`) → `sleep 10` →
+  health-check. `concurrency: deploy-production` — два деплоя не гоняются. systemd нет,
+  автоподъём после падения/ребута даёт сам Docker.
 
 ---
 
-Назад к началу: [INDEX.md](INDEX.md) · [архитектура](ARCHITECTURE.md) ·
-[API](API.md) · [эксплуатация](OPERATIONS.md) · [чек-листы](CHECKLISTS.md).
+## 6. Мониторинг и алерты
+
+**Дашборды (Grafana, orgId 3 «Katya»):**
+
+- **PetBank — бизнес-метрики** (`petbank-business`, 21 панель): решения, доля одобрения,
+  причины отказов, суммы (p50/p90/p99 + heatmap), HTTP по ручкам, логи (Loki). Датасорсы:
+  Prometheus `prom-3`, Loki `loki-katya-3`. Refresh 10s.
+- **FastAPI Observability** (community #22676): HTTP RED + CPU/RAM.
+
+**Алерты** (как код в `grafana/provisioning/alerting/`, см. PR про grafana):
+
+| Алерт | Условие | Eval / `for` | noData | Severity |
+|---|---|---|---|---|
+| **`up == 0`** (petbank-up-down) | сервис не отвечает на scrape | eval **30s**, for **1m** | **Alerting** (серия пропала = тоже падение) | critical |
+| **Диск `< 15%`** (petbank-disk-low) | мало места на `/` VM | eval **1m**, for **5m** | **NoData** (нет node_exporter = не паникуем) | warning |
+
+> Disk-алерт **требует node_exporter** на VM. Уведомления реально пойдут только после
+> привязки contact point.
+
+---
+
+## 7. Честные пробелы
+
+- **Чёрный список на стенде нестабилен** — может отдавать `black_list_check_unavailable`
+  вместо ответа (fail-closed → лишние отказы).
+- **Алерты ещё не залиты** в живую Grafana + нет contact point → уведомления пока не приходят.
+- **Plaintext HTTP** на `0.0.0.0:8000`, отдаёт ПДн; `/metrics` без auth — для учебного
+  стенда ок, для прода — nginx + TLS.
+- **node_exporter** для disk-алерта — наличие не подтверждено.
+- **`docker` = root** на VM (деплой-аккаунт в группе docker).
+
+---
+
+Назад: [INDEX.md](INDEX.md) · [архитектура](ARCHITECTURE.md) · [API](API.md) ·
+[эксплуатация](OPERATIONS.md) · [чек-листы](CHECKLISTS.md) · [PDF-выгрузка](status/README.md).

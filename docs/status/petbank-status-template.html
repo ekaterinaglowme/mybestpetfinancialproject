@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #1a1f29; font-size: 10.5px; line-height: 1.5; margin: 0;
+  }
+  h1 { font-size: 23px; margin: 0 0 2px; color: #0b3d62; }
+  h2 {
+    font-size: 15px; margin: 22px 0 8px; color: #0b3d62;
+    border-bottom: 2px solid #2a7ab0; padding-bottom: 4px;
+  }
+  h3 { font-size: 12px; margin: 14px 0 6px; color: #14507a; }
+  .sub { color: #5b6b7c; font-size: 10px; margin: 0 0 14px; }
+  p { margin: 6px 0; }
+  code {
+    font-family: "SF Mono", "Menlo", monospace; font-size: 9.5px;
+    background: #eef3f7; padding: 1px 4px; border-radius: 3px; color: #0b3d62;
+  }
+  pre {
+    background: #0b1f30; color: #cfe6f5; padding: 10px 12px; border-radius: 6px;
+    font-family: "SF Mono", "Menlo", monospace; font-size: 9px; line-height: 1.45;
+    overflow-x: auto; white-space: pre; margin: 8px 0;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 9.7px; }
+  th, td { border: 1px solid #cdd8e1; padding: 4px 7px; text-align: left; vertical-align: top; }
+  th { background: #2a7ab0; color: #fff; font-weight: 600; }
+  tr:nth-child(even) td { background: #f3f7fa; }
+  .lead {
+    background: #eef6fb; border-left: 4px solid #2a7ab0; padding: 9px 12px;
+    border-radius: 0 6px 6px 0; margin: 10px 0;
+  }
+  .warn {
+    background: #fff6e9; border-left: 4px solid #e0922f; padding: 9px 12px;
+    border-radius: 0 6px 6px 0; margin: 10px 0;
+  }
+  .ok { color: #1f8a4c; font-weight: 600; }
+  .muted { color: #5b6b7c; }
+  ul { margin: 6px 0; padding-left: 18px; }
+  li { margin: 3px 0; }
+  .section { page-break-inside: avoid; }
+  .footer { margin-top: 22px; padding-top: 8px; border-top: 1px solid #cdd8e1; color: #5b6b7c; font-size: 9px; }
+  strong { color: #0b3d62; }
+</style>
+</head>
+<body>
+
+<h1>🧭 PetBank — как всё работает</h1>
+<p class="sub">Технический и бизнес-статус системы · по состоянию на 2026-06-30 · источник: ветка <code>origin/main</code> (задеплоено на VM)</p>
+
+<div class="warn">
+  <strong>Важно:</strong> файл <code>docs/STATUS.md</code> в репозитории устарел (там «возраст 18–35»,
+  «стоп-лист стран», «БД не подключена»). Этот документ отражает <strong>реальный боевой код</strong>.
+</div>
+
+<div class="section">
+<h2>1. Бизнес: что это и зачем</h2>
+<p>PetBank — микросервис <strong>приёма кредитных заявок и выдачи микрозаймов</strong> (учебный стенд). Жизненный цикл:</p>
+<ul>
+  <li>Клиент шлёт заявку → сервис принимает <strong>решение</strong> <code>approved</code> / <code>declined</code>.</li>
+  <li>Если одобрено <strong>и указана сумма</strong> → автоматически <strong>выдаётся заём</strong> (тот же <code>application_id</code>).</li>
+  <li>По займу можно смотреть <strong>статус и текущий долг</strong> и <strong>гасить</strong> его.</li>
+</ul>
+
+<h3>Бизнес-правила решения (для одобрения нужны обе проверки)</h3>
+<table>
+  <tr><th>Правило</th><th>Деталь</th><th>Причина отказа (метрика)</th></tr>
+  <tr><td>Возраст</td><td><code>≥ 18</code> лет (<code>MIN_AGE</code>)</td><td><code>age_below_min</code></td></tr>
+  <tr><td>Чёрный список паспортов</td><td>паспорт <strong>не</strong> в стоп-листе (внешний сервис СтопЛист)</td><td><code>black_list</code></td></tr>
+  <tr><td>Доступность проверки</td><td>СтопЛист недоступен → <strong>fail-closed</strong> (отказ)</td><td><code>black_list_check_unavailable</code></td></tr>
+</table>
+
+<h3>Заём — дисконтная ставка (дольше держишь — ниже % к телу)</h3>
+<table>
+  <tr><th>Возраст займа</th><th>Ставка к телу</th></tr>
+  <tr><td>0–7 дней</td><td><strong>10%</strong></td></tr>
+  <tr><td>8–30 дней</td><td><strong>5%</strong></td></tr>
+  <tr><td>&gt; 30 дней</td><td><strong>2%</strong></td></tr>
+</table>
+<p>Долг = <code>тело × (1 + ставка)</code>. Цель займа — только <code>покупка</code> или <code>перекредитование</code>.</p>
+</div>
+
+<div class="section">
+<h2>2. Архитектура и поток запроса</h2>
+<p><strong>Стек:</strong> FastAPI + Uvicorn, Python 3.14-slim, Pydantic-валидация, SQLAlchemy async + asyncpg, PostgreSQL 16, httpx. Всё в Docker под непривилегированным <code>appuser</code>.</p>
+
+<h3>Эндпоинты</h3>
+<table>
+  <tr><th>Метод / путь</th><th>Что делает</th></tr>
+  <tr><td><code>POST /applications/v2</code></td><td>подать заявку → решение (v1 удалён в #39)</td></tr>
+  <tr><td><code>GET /loans/{id}</code></td><td>статус и текущий долг займа</td></tr>
+  <tr><td><code>POST /loans/{id}/repay</code></td><td>погасить заём (409, если уже отдан)</td></tr>
+  <tr><td><code>GET /health</code></td><td>жив ли сервис</td></tr>
+  <tr><td><code>GET /</code> · <code>GET /docs</code></td><td>справка · Swagger UI</td></tr>
+  <tr><td><code>GET /metrics</code></td><td>Prometheus-метрики</td></tr>
+</table>
+
+<h3>Поток обработки заявки (порядок не случаен)</h3>
+<pre>запрос → [middleware: rate limit] → [middleware: JSON-лог + request_id]
+   → Pydantic-валидация (иначе 422)
+   → 1) ЧЁРНЫЙ СПИСОК (внешний вызов) — ДО открытия сессии БД
+   → 2) make_decision_v2 (возраст + чёрный список) → approved/declined + метрики
+   → 3) ОДНА транзакция БД:
+        get_or_create_user → save_application → (если approved+amount) create_loan
+   → ответ</pre>
+<p>Ключевой приём: <strong>чёрный список дёргается до захвата соединения из пула БД</strong> — иначе под залпом заявок соединение висело бы открытым весь внешний вызов и пул копил бы очередь. Запись в БД — <strong>одной транзакцией</strong> (commit при успехе, rollback при ошибке → 500).</p>
+
+<h3>Данные (PostgreSQL)</h3>
+<ul>
+  <li><code>users</code> — идемпотентность по <code>UniqueConstraint(ФИО + ДР + телефон)</code> → один человек не плодит дубли.</li>
+  <li><code>applications</code> (1:N к user) — сумма, статус, причины (JSONB), ПДн заявки v2.</li>
+  <li><code>loans</code> — заём по <code>application_id</code>: тело, дата выдачи, дата возврата.</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>3. Тайминги, пороги, лимиты (всё в одном месте)</h2>
+<table>
+  <tr><th>Параметр</th><th>Значение</th><th>env-override</th><th>Где</th></tr>
+  <tr><td>Мин. возраст</td><td><strong>18 лет</strong></td><td>—</td><td><code>server.py</code></td></tr>
+  <tr><td><strong>Таймаут чёрного списка</strong></td><td><strong>0.8 с</strong></td><td><code>BLACK_LIST_TIMEOUT_SECONDS</code></td><td><code>black_list.py</code></td></tr>
+  <tr><td>URL чёрного списка</td><td><code>212.147.238.3:8090</code></td><td><code>BLACK_LIST_URL</code></td><td><code>black_list.py</code></td></tr>
+  <tr><td><strong>Пул БД</strong></td><td>size <strong>20</strong> + overflow <strong>10</strong> (=до 30)</td><td><code>DB_POOL_SIZE</code> / <code>DB_MAX_OVERFLOW</code></td><td><code>db.py</code></td></tr>
+  <tr><td><strong>Ожидание соединения из пула</strong></td><td><strong>5 с</strong></td><td><code>DB_POOL_TIMEOUT_SECONDS</code></td><td><code>db.py</code></td></tr>
+  <tr><td><strong>Таймаут одного SQL</strong></td><td><strong>5 с</strong></td><td><code>DB_COMMAND_TIMEOUT_SECONDS</code></td><td><code>db.py</code></td></tr>
+  <tr><td>pre-ping соединений</td><td>вкл</td><td>—</td><td><code>db.py</code></td></tr>
+  <tr><td><strong>Rate limit</strong></td><td><strong>100 rps</strong>, burst <strong>100</strong> → 429 + <code>Retry-After</code></td><td><code>RATE_LIMIT_RPS</code> / <code>_BURST</code></td><td><code>server.py</code></td></tr>
+  <tr><td>Тело запроса в лог</td><td>до <strong>10240 байт</strong></td><td>—</td><td><code>server.py</code></td></tr>
+  <tr><td><strong>Docker healthcheck</strong></td><td>interval <strong>30s</strong>, timeout <strong>3s</strong>, start <strong>5s</strong>, retries <strong>3</strong></td><td>—</td><td><code>Dockerfile</code></td></tr>
+  <tr><td>Лимиты контейнера</td><td><strong>512 МБ</strong> RAM, <strong>0.5</strong> CPU</td><td>—</td><td>CI deploy</td></tr>
+  <tr><td>Пауза перед health после деплоя</td><td><strong>10 с</strong></td><td>—</td><td><code>ci.yml</code></td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2>4. Метрики на <code>/metrics</code></h2>
+<p><strong>HTTP (авто, prometheus-fastapi-instrumentator):</strong> <code>http_requests_total{handler,status}</code>, <code>http_request_duration_seconds_*</code> — RED по ручкам.</p>
+<h3>Бизнес-метрики (<code>metrics.py</code>)</h3>
+<table>
+  <tr><th>Метрика</th><th>Тип</th><th>Лейблы / детали</th></tr>
+  <tr><td><code>petbank_decisions_total</code></td><td>counter</td><td><code>status</code> (approved/declined), <code>country</code> (сейчас <code>-</code>)</td></tr>
+  <tr><td><code>petbank_rejection_reasons_total</code></td><td>counter</td><td><code>reason</code>: age_below_min / black_list / black_list_check_unavailable</td></tr>
+  <tr><td><code>petbank_application_amount_rub</code></td><td>histogram</td><td>бакеты 10k · 50k · 100k · 250k · 500k · 1M · ∞</td></tr>
+  <tr><td><code>petbank_rate_limited_total</code></td><td>counter</td><td>заявки, отбитые лимитером (429)</td></tr>
+  <tr><td><code>petbank_db_write_seconds</code></td><td>histogram</td><td><code>operation</code> (напр. <code>repay</code>)</td></tr>
+  <tr><td><code>petbank_db_transaction_seconds</code></td><td>histogram</td><td>время commit на запрос</td></tr>
+  <tr><td><code>petbank_external_call_seconds</code></td><td>histogram</td><td><code>service</code> (<code>black_list</code>), бакеты до ~0.8 с</td></tr>
+  <tr><td><code>petbank_black_list_phase_seconds</code></td><td>histogram</td><td><code>phase</code>: request / response (две фазы вызова)</td></tr>
+  <tr><td><code>petbank_app_info</code></td><td>info</td><td><code>version</code>, <code>commit</code> (из CI build-arg)</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2>5. Инфраструктура и деплой</h2>
+<p><strong>VM <code>212.147.238.3</code> — всё на одной машине:</strong> app <code>:8000</code>, Postgres <code>:5432</code>,
+Prometheus <code>:9090</code> (закрыт фаерволом), Grafana <code>:3000</code>, Loki. Снаружи открыты только
+<code>22 / 8000 / 3000</code>. Диск — общий бутылочник (его переполнение уронило дашборды 30.06).</p>
+<h3>CI/CD (GitHub Actions)</h3>
+<ul>
+  <li><strong>PR в main:</strong> <code>Tests</code> (pytest) + <code>Integration</code> (blackbox на реальном Docker-стеке) + <code>Build</code> (сборка образа без публикации).</li>
+  <li><strong>Push в main:</strong> сборка → публикация образа в <code>ghcr.io</code> → <strong>деплой на VM</strong> по SSH:
+  <code>docker pull</code> + пересоздание контейнера (<code>--restart unless-stopped --memory=512m --cpus=0.5 -p 8000:8000</code>)
+  → <code>sleep 10</code> → health-check. <code>concurrency: deploy-production</code> — два деплоя не гоняются.
+  systemd нет, автоподъём после падения/ребута даёт сам Docker.</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>6. Мониторинг и алерты</h2>
+<h3>Дашборды (Grafana, orgId 3 «Katya»)</h3>
+<ul>
+  <li><strong>PetBank — бизнес-метрики</strong> (<code>petbank-business</code>, 21 панель): решения, доля одобрения,
+  причины отказов, суммы (p50/p90/p99 + heatmap), HTTP по ручкам, логи (Loki). Датасорсы: Prometheus
+  <code>prom-3</code>, Loki <code>loki-katya-3</code>. Refresh 10s.</li>
+  <li><strong>FastAPI Observability</strong> (community #22676): HTTP RED + CPU/RAM.</li>
+</ul>
+<h3>Алерты (PR #41, как код в <code>grafana/provisioning/alerting/</code>)</h3>
+<table>
+  <tr><th>Алерт</th><th>Условие</th><th>Eval / <code>for</code></th><th>noData</th><th>Severity</th></tr>
+  <tr><td><strong><code>up == 0</code></strong> (petbank-up-down)</td><td>сервис не отвечает на scrape</td><td>eval <strong>30s</strong>, for <strong>1m</strong></td><td><strong>Alerting</strong> (серия пропала = тоже падение)</td><td>critical</td></tr>
+  <tr><td><strong>Диск <code>&lt; 15%</code></strong> (petbank-disk-low)</td><td>мало места на <code>/</code> VM</td><td>eval <strong>1m</strong>, for <strong>5m</strong></td><td><strong>NoData</strong> (нет node_exporter = не паникуем)</td><td>warning</td></tr>
+</table>
+<div class="warn"><strong>Диск-алерт требует node_exporter</strong> на VM (снаружи проверить нельзя — фаервол). Уведомления реально пойдут только после привязки contact point.</div>
+</div>
+
+<div class="section">
+<h2>7. Честные пробелы (актуальные)</h2>
+<ul>
+  <li><strong><code>docs/STATUS.md</code> устарел</strong> (возраст 18–35, стоп-лист стран, «БД не подключена») — не соответствует коду.</li>
+  <li><strong>Чёрный список на стенде нестабилен</strong> — в тесте давал <code>black_list_check_unavailable</code> вместо ответа.</li>
+  <li><strong>Алерты ещё не залиты</strong> в живую Grafana + нет contact point → уведомления пока не приходят.</li>
+  <li><strong>Plaintext HTTP</strong> на <code>0.0.0.0:8000</code>, отдаёт ПДн; <code>/metrics</code> без auth — для учебного стенда ок, для прода — nginx+TLS.</li>
+  <li><strong>node_exporter</strong> для disk-алерта — наличие не подтверждено.</li>
+</ul>
+</div>
+
+<div class="footer">
+  PetBank · автоматически собрано из боевого кода <code>origin/main</code> · 2026-06-30 ·
+  репозиторий <code>ekaterinaglowme/mybestpetfinancialproject</code>
+</div>
+
+</body>
+</html>
