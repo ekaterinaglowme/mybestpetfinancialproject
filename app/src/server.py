@@ -263,9 +263,10 @@ def make_decision_v2(
 async def lifespan(app: FastAPI):
     own = db.AsyncSessionLocal is None       # в тестах уже сконфигурировано на SQLite
     if own:
-        # Пул держим выше пикового числа одновременных заявок (sim шлёт пачками),
-        # чтобы соединения переиспользовались, а не пересоздавались на каждый всплеск.
-        db.configure(db.build_dsn(), pool_size=20, max_overflow=10)
+        # Пул выше пикового числа одновременных заявок (sim шлёт пачками) +
+        # таймауты на пул и на запрос (engine_options): залипший запрос или
+        # исчерпание пула не должны подвешивать воркер навсегда.
+        db.configure(db.build_dsn(), **db.engine_options())
     own_bl = black_list._client is None      # в тестах клиент инжектят отдельно
     if own_bl:
         black_list.configure()

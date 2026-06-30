@@ -30,6 +30,29 @@ def build_dsn(env: Mapping[str, str] | None = None) -> str:
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{database}"
 
 
+def engine_options(env: Mapping[str, str] | None = None) -> dict:
+    """Параметры боевого async-engine (Postgres/asyncpg): пул и таймауты.
+
+    Принцип: любой I/O — с таймаутом, БД тоже. Иначе исчерпание пула или
+    залипший запрос подвешивают воркер навсегда и копят очередь под нагрузкой.
+      - pool_timeout      — сколько ждать свободное соединение из пула;
+      - command_timeout   — предел на один SQL-запрос (asyncpg);
+      - pool_pre_ping     — проверять живость соединения перед выдачей
+                            (отсекает «мертвецов» после рестарта БД).
+    Все значения переопределяются через env. Не передаётся для SQLite в тестах.
+    """
+    env = os.environ if env is None else env
+    return {
+        "pool_size": int(env.get("DB_POOL_SIZE", "20")),
+        "max_overflow": int(env.get("DB_MAX_OVERFLOW", "10")),
+        "pool_timeout": float(env.get("DB_POOL_TIMEOUT_SECONDS", "5")),
+        "pool_pre_ping": True,
+        "connect_args": {
+            "command_timeout": float(env.get("DB_COMMAND_TIMEOUT_SECONDS", "5")),
+        },
+    }
+
+
 # Инициализируются в configure(): на старте приложения (lifespan) или в тестовой фикстуре.
 engine: AsyncEngine | None = None
 AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
