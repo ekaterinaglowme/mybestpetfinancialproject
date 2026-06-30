@@ -3,7 +3,7 @@
 Файловый SQLite (а не in-memory) — чтобы и синхронный TestClient (origin-тесты
 метрик/логов/ratelimit), и async httpx-клиент видели одну схему: каждый из них
 открывает своё соединение к файлу в своём event loop. БД конфигурируется autouse,
-т.к. ручка /applications теперь всегда ходит в базу.
+т.к. ручка /applications/v2 всегда ходит в базу.
 """
 
 import pytest_asyncio

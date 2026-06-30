@@ -3,10 +3,10 @@
 Запуск:  python app/src/main.py   (или  python app/src/server.py 8080  — другой порт)
 
 Эндпоинты:
-    POST /applications  — подать заявку, вернёт решение approved / declined
-    GET  /health        — проверка, что сервер жив
-    GET  /              — короткая справка
-    GET  /docs          — Swagger UI (интерактивная документация)
+    POST /applications/v2  — подать заявку, вернёт решение approved / declined
+    GET  /health           — проверка, что сервер жив
+    GET  /                 — короткая справка
+    GET  /docs             — Swagger UI (интерактивная документация)
 """
 
 import json
@@ -48,12 +48,8 @@ setup_logging()
 
 # --- Бизнес-правила --------------------------------------------------------
 
-# Заявителю должно быть от MIN_AGE до MAX_AGE лет включительно.
+# Заявителю должно быть не меньше MIN_AGE лет.
 MIN_AGE = 18
-MAX_AGE = 35
-
-# Страны, заявки из которых не принимаются (сравнение без учёта регистра).
-BLOCKED_COUNTRIES = {"китай"}
 
 
 # --- Pydantic-модели -------------------------------------------------------
@@ -132,27 +128,6 @@ class ApplicationBase(BaseModel):
         return float(v)
 
 
-class ApplicationRequest(ApplicationBase):
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "last_name": "Иванов",
-            "first_name": "Иван",
-            "middle_name": "Иванович",
-            "phone": "+79991234567",
-            "birth_date": "2000-05-15",
-            "country": "Россия",
-            "amount": 100000,
-        }
-    })
-
-    country: str
-
-    @field_validator("country", mode="before")
-    @classmethod
-    def _v_country(cls, v: object) -> str:
-        return _strip_required_nonempty(v)
-
-
 class ApplicationRequestV2(ApplicationBase):
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -222,60 +197,6 @@ def calculate_age(birth_date: date, today: date) -> int:
     if (today.month, today.day) < (birth_date.month, birth_date.day):
         years -= 1
     return years
-
-
-def make_decision(payload: ApplicationRequest) -> dict:
-    """Принимает решение по провалидированной заявке."""
-    today = date.today()
-    age = calculate_age(payload.birth_date, today)
-    application_id = str(uuid.uuid4())
-
-    logger.info(
-        "Заявка %s: %s %s, возраст %d, страна %s",
-        application_id, payload.last_name, payload.first_name, age, payload.country,
-    )
-
-    reasons = []
-    if age < MIN_AGE:
-        reason = f"Возраст заявителя {age} лет — меньше минимально допустимого {MIN_AGE}"
-        reasons.append(reason)
-        REJECTION_REASONS.labels(reason="age_below_min").inc()
-        logger.info("Заявка %s — отказ: %s", application_id, reason)
-    if age > MAX_AGE:
-        reason = f"Возраст заявителя {age} лет — больше макс допустимого {MAX_AGE}"
-        reasons.append(reason)
-        REJECTION_REASONS.labels(reason="age_above_max").inc()
-        logger.info("Заявка %s — отказ: %s", application_id, reason)
-    if payload.country.lower() in BLOCKED_COUNTRIES:
-        reason = f"Заявки из страны «{payload.country}» не принимаются"
-        reasons.append(reason)
-        REJECTION_REASONS.labels(reason="blocked_country").inc()
-        logger.info("Заявка %s — отказ: %s", application_id, reason)
-
-    status = "approved" if not reasons else "declined"
-    DECISIONS.labels(status=status, country=payload.country.strip().lower()).inc()
-    if payload.amount is not None:
-        APPLICATION_AMOUNT_RUB.observe(payload.amount)
-    logger.info(
-        "Заявка %s — итог: %s", application_id, status.upper(),
-        extra={"application_id": application_id, "status": status},
-    )
-
-    full_name = " ".join(
-        part for part in (payload.last_name, payload.first_name, payload.middle_name) if part
-    )
-
-    return {
-        "application_id": application_id,
-        "status": status,
-        "applicant": {
-            "full_name": full_name,
-            "age": age,
-            "phone": payload.phone,
-        },
-        "reasons": reasons,
-        "received_at": datetime.now().isoformat(timespec="seconds"),
-    }
 
 
 def make_decision_v2(
@@ -357,7 +278,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="PetBank", lifespan=lifespan)
 
-# --- Защита /applications под нагрузкой (env-конфиг; 0 = выключить) ---
+# --- Защита /applications/v2 под нагрузкой (env-конфиг; 0 = выключить) ---
 _RATE_LIMIT_RPS = float(os.environ.get("RATE_LIMIT_RPS", "100"))
 _RATE_LIMIT_BURST = float(os.environ.get("RATE_LIMIT_BURST") or _RATE_LIMIT_RPS)
 
@@ -366,7 +287,7 @@ if _RATE_LIMIT_RPS > 0:
         app,
         bucket=TokenBucket(_RATE_LIMIT_RPS, _RATE_LIMIT_BURST),
         counter=RATE_LIMITED,
-        paths=("/applications", "/applications/v2"),
+        paths=("/applications/v2",),
     )
 
 # Prometheus-метрики: instrumentator сам поднимает GET /metrics и считает
@@ -435,48 +356,9 @@ def health():
 def root():
     return {
         "service": "PetBank",
-        "endpoints": ["POST /applications", "GET /health", "GET /docs"],
-        "rule": f"возраст {MIN_AGE}-{MAX_AGE}, страна не в стоп-листе",
+        "endpoints": ["POST /applications/v2", "GET /health", "GET /docs"],
+        "rule": f"возраст от {MIN_AGE}, паспорт не в чёрном списке",
     }
-
-
-@app.post("/applications", response_model=ApplicationDecision)
-async def create_application(
-    payload: ApplicationRequest,
-    session: AsyncSession = Depends(get_session),
-):
-    decision = make_decision(payload)
-    try:
-        user = await get_or_create_user(
-            session,
-            last_name=payload.last_name,
-            first_name=payload.first_name,
-            middle_name=payload.middle_name,
-            birth_date=payload.birth_date,
-            phone=payload.phone,
-        )
-        await save_application(
-            session,
-            application_id=uuid.UUID(decision["application_id"]),
-            user=user,
-            amount=payload.amount,
-            country=payload.country,
-            status=decision["status"],
-            reasons=decision["reasons"],
-            received_at=datetime.fromisoformat(decision["received_at"]),
-        )
-        # Одобрение с суммой = выдача займа (ключ — тот же application_id).
-        if decision["status"] == "approved" and payload.amount:
-            await create_loan(
-                session,
-                application_id=uuid.UUID(decision["application_id"]),
-                amount=payload.amount,
-                issued_at=date.today(),
-            )
-    except SQLAlchemyError as exc:
-        logger.exception("Не удалось сохранить заявку %s", decision["application_id"])
-        raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc
-    return decision
 
 
 @app.get("/loans/{application_id}", response_model=LoanStatus)
@@ -568,10 +450,7 @@ def run(host="0.0.0.0", port=None):
     port = port or int(os.environ.get("PORT", "8000"))
     print(f"PetBank запущен: http://localhost:{port}  (Ctrl+C — остановить)")
     print(f"Swagger UI:       http://localhost:{port}/docs")
-    print(
-        f"Правило одобрения: возраст {MIN_AGE}-{MAX_AGE} лет, "
-        f"страна не в стоп-листе ({', '.join(sorted(BLOCKED_COUNTRIES))})"
-    )
+    print(f"Правило одобрения: возраст от {MIN_AGE} лет, паспорт не в чёрном списке")
     setup_logging()
     uvicorn.run(app, host=host, port=port, log_config=None, access_log=False)
 

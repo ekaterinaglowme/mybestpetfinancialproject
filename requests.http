@@ -1,8 +1,8 @@
 ### Проверка, что сервер жив
 GET http://localhost:8000/health
 
-### Заявка — должно ОДОБРИТЬ (возраст 18-35, страна разрешена)
-POST http://localhost:8000/applications
+### Заявка — должно ОДОБРИТЬ (совершеннолетний, паспорт не в чёрном списке)
+POST http://localhost:8000/applications/v2
 Content-Type: application/json
 
 {
@@ -10,13 +10,16 @@ Content-Type: application/json
   "first_name": "Иван",
   "middle_name": "Иванович",
   "phone": "+79991234567",
-  "birth_date": "2000-05-15",
-  "country": "Россия",
+  "birth_date": "1990-01-01",
+  "email": "ivan@example.ru",
+  "passport": "1234567890",
+  "region": "Москва",
+  "loan_purpose": "покупка",
   "amount": 100000
 }
 
 ### Заявка — должно ОТКАЗАТЬ (младше 18)
-POST http://localhost:8000/applications
+POST http://localhost:8000/applications/v2
 Content-Type: application/json
 
 {
@@ -24,28 +27,37 @@ Content-Type: application/json
   "first_name": "Пётр",
   "phone": "+79990001122",
   "birth_date": "2010-01-01",
-  "country": "Россия"
+  "email": "petr@example.ru",
+  "passport": "1234567890",
+  "region": "Москва",
+  "loan_purpose": "покупка"
 }
 
-### Заявка — должно ОТКАЗАТЬ (страна в стоп-листе)
-POST http://localhost:8000/applications
-Content-Type: application/json
-
-{
-  "last_name": "Ли",
-  "first_name": "Вэй",
-  "phone": "+861234567890",
-  "birth_date": "2000-05-15",
-  "country": "Китай"
-}
-
-### Ошибка валидации — нет даты рождения
-POST http://localhost:8000/applications
+### Заявка — должно ОТКАЗАТЬ (паспорт в чёрном списке СтопЛиста)
+POST http://localhost:8000/applications/v2
 Content-Type: application/json
 
 {
   "last_name": "Сидоров",
   "first_name": "Сидор",
   "phone": "+79993334455",
-  "country": "Россия"
+  "birth_date": "1990-01-01",
+  "email": "sidor@example.ru",
+  "passport": "0000000000",
+  "region": "Москва",
+  "loan_purpose": "перекредитование"
+}
+
+### Ошибка валидации — нет обязательного поля passport (422)
+POST http://localhost:8000/applications/v2
+Content-Type: application/json
+
+{
+  "last_name": "Сидоров",
+  "first_name": "Сидор",
+  "phone": "+79993334455",
+  "birth_date": "1990-01-01",
+  "email": "sidor@example.ru",
+  "region": "Москва",
+  "loan_purpose": "покупка"
 }
