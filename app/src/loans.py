@@ -31,11 +31,12 @@ def amount_owed(amount, age_days: int) -> float:
     return round(float(amount) * (1 + rate_for_age(age_days)), 2)
 
 
-def loan_view(*, application_id, amount, issued_at: date, repaid_at: date | None,
-              today: date) -> dict:
-    """Статус и долг для ответа API.
+def loan_view(*, application_id, amount, status: str, issued_at: date,
+              repaid_at: date | None, today: date) -> dict:
+    """Представление займа для ответа API.
 
-    Активный заём — возраст на `today`; возвращённый — заморожен на дату
+    `status` хранится в БД и передаётся как есть (loan_view его не вычисляет).
+    Долг: активный заём считается на `today`; возвращённый — заморожен на дату
     возврата (`repaid_at`).
     """
     as_of = repaid_at or today
@@ -44,7 +45,7 @@ def loan_view(*, application_id, amount, issued_at: date, repaid_at: date | None
         "application_id": str(application_id),
         "amount": float(amount),
         "issued_at": issued_at,
-        "status": "отдал" if repaid_at else "не отдал",
+        "status": status,
         "days_elapsed": age_days,
         "current_rate": rate_for_age(age_days),
         "amount_owed": amount_owed(amount, age_days),

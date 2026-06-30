@@ -39,7 +39,7 @@ def test_invariant_odobrenie_s_summoy_sozdaet_zaem(base_url):
     Дано: заявка с указанной суммой.
     Когда: POST /applications/v2, затем GET /loans/{тот же id}.
     Тогда: если решение approved — заём есть (200), сумма совпадает, статус
-           «не отдал»; если declined — займа нет (404). Конкретное решение не
+           «выдано»; если declined — займа нет (404). Конкретное решение не
            навязываем — проверяем согласованность БД с решением.
     """
     p = _payload()
@@ -52,7 +52,7 @@ def test_invariant_odobrenie_s_summoy_sozdaet_zaem(base_url):
     if body["status"] == "approved":
         assert loan.status_code == 200, loan.text
         assert loan.json()["amount"] == p["amount"]
-        assert loan.json()["status"] == "не отдал"
+        assert loan.json()["status"] == "выдано"
     else:
         assert loan.status_code == 404
 
@@ -64,7 +64,7 @@ def test_zhiznennyy_cikl_pogasheniya(base_url):
     Дано: одобренная заявка с суммой (если текущие правила её не одобрили —
           тест пропускается, гасить нечего).
     Когда: GET статус → POST repay → POST repay ещё раз.
-    Тогда: статус «не отдал» → после repay «отдал» (200) → повторный repay 409.
+    Тогда: статус «выдано» → после repay «вернули» (200) → повторный repay 409.
     """
     created = httpx.post(f"{base_url}/applications/v2", json=_payload(), timeout=10)
     assert created.status_code == 200, created.text
@@ -75,12 +75,39 @@ def test_zhiznennyy_cikl_pogasheniya(base_url):
 
     status = httpx.get(f"{base_url}/loans/{app_id}", timeout=10)
     assert status.status_code == 200
-    assert status.json()["status"] == "не отдал"
+    assert status.json()["status"] == "выдано"
 
     repaid = httpx.post(f"{base_url}/loans/{app_id}/repay", timeout=10)
     assert repaid.status_code == 200, repaid.text
-    assert repaid.json()["status"] == "отдал"
+    assert repaid.json()["status"] == "вернули"
     assert repaid.json()["repaid_at"]
+
+    again = httpx.post(f"{base_url}/loans/{app_id}/repay", timeout=10)
+    assert again.status_code == 409
+
+
+@pytest.mark.blackbox
+def test_spisanie_ne_vernuli(base_url):
+    """Невозврат: оператор фиксирует, что денег не вернули (списание).
+
+    Дано: одобренная заявка с суммой (иначе списывать нечего — skip).
+    Когда: POST /loans/{id}/repay с телом {"outcome": "не вернули"}.
+    Тогда: статус «не вернули» (200), дата возврата пустая (денег не было),
+           повторная фиксация исхода → 409.
+    """
+    created = httpx.post(f"{base_url}/applications/v2", json=_payload(), timeout=10)
+    assert created.status_code == 200, created.text
+    body = created.json()
+    if body["status"] != "approved":
+        pytest.skip("текущие правила не одобрили заявку — списывать нечего")
+    app_id = body["application_id"]
+
+    resp = httpx.post(
+        f"{base_url}/loans/{app_id}/repay", json={"outcome": "не вернули"}, timeout=10
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "не вернули"
+    assert resp.json()["repaid_at"] is None
 
     again = httpx.post(f"{base_url}/loans/{app_id}/repay", timeout=10)
     assert again.status_code == 409
