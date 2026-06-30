@@ -1,0 +1,79 @@
+# Grafana-managed alert: PetBank недоступен.
+#
+# Срабатывает, когда приложение не отвечает на scrape Prometheus:
+#   - up{job="petbank"} == 0   — таргет есть, но scrape падает (сервис лёг);
+#   - серия up отсутствует     — таргет вовсе пропал из Prometheus
+#                                (ловится через noDataState: Alerting).
+#
+# Это «настоящее падение» — в отличие от нулевых бизнес-счётчиков, которые могут
+# быть просто отсутствием трафика. Алерт на up == 0 не зависит от трафика.
+#
+# Org/датасорсы стенда: orgId 3 («Katya»), Prometheus uid = prom-3 (как в дашборде).
+# Применение: см. grafana/README.md (provisioning-маунт или Alerting provisioning API).
+apiVersion: 1
+
+groups:
+  - orgId: 3
+    name: petbank-availability
+    folder: PetBank
+    # Как часто Grafana вычисляет правила группы.
+    interval: 30s
+    rules:
+      - uid: petbank-up-down
+        title: PetBank недоступен (up == 0)
+        # Итоговое условие алерта — refId C (порог ниже).
+        condition: C
+        data:
+          # A — сырое значение up по нашему джобу за последние 2 минуты.
+          - refId: A
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: prom-3
+            model:
+              refId: A
+              editorMode: code
+              expr: up{job="petbank"}
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          # B — берём последнее значение серии.
+          - refId: B
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          # C — порог: тревога, если последнее up < 1 (т.е. 0 = сервис лежит).
+          - refId: C
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+        # Нет данных (серия up пропала, таргет исчез) — тоже считаем падением.
+        noDataState: Alerting
+        # Ошибка вычисления (например, Prometheus недоступен) — тревога.
+        execErrState: Alerting
+        # Сколько условие должно держаться, прежде чем алерт станет Firing.
+        for: 1m
+        labels:
+          severity: critical
+          service: petbank
+        annotations:
+          summary: PetBank (job=petbank) не отвечает на scrape — сервис, вероятно, лёг.
+          description: >-
+            up{job="petbank"} == 0 (или серия отсутствует) дольше 1 минуты.
+            Проверь контейнер на VM: docker ps / docker logs petbank,
+            и доступность http://212.147.238.3:8000/health.
