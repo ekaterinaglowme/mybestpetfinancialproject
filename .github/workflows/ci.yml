@@ -7,6 +7,10 @@ name: CI/CD
 # гоняем повторно. Гарантия «в main только зелёный код» держится на branch
 # protection: PR нельзя смёржить, пока обязательные jobs не зелёные.
 # Деплой на виртуалку — только при push в main (после мёржа PR). На PR деплоя нет.
+# На push в main порядок жёсткий: сначала job migrate (alembic upgrade head),
+# и только после его успеха — job deploy (deploy: needs [docker, migrate]). Так
+# новый контейнер никогда не поднимается на несмигрированной схеме. Миграция
+# упала — деплой не пошёл, старый контейнер продолжает обслуживать трафик.
 on:
   push:
     branches: [main]
@@ -104,9 +108,41 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  migrate:
+    name: DB migrate (alembic upgrade head)
+    # Миграцию гоним ТОЛЬКО на push в main (после мёржа PR) — перед деплоем.
+    # deploy: needs [docker, migrate], поэтому контейнер пересоздаётся строго
+    # после успешной миграции. alembic upgrade head идемпотентен: если схема уже
+    # на head — это no-op, гонять на каждый деплой безопасно.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency: migrate-production   # две миграции параллельно не пойдут
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # DB_HOST/DB_PORT совпадают с теми, что deploy прокидывает в контейнер —
+      # мигрируем ту же БД на VM. env.py берёт DSN из DB_* через db.build_dsn().
+      - name: Run migrations
+        env:
+          DB_HOST: 212.147.238.3
+          DB_PORT: "5432"
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_DATABASE: ${{ secrets.DB_DATABASE }}
+        run: alembic upgrade head
+
   deploy:
     name: Deploy to VM
-    needs: docker                    # тестов на main нет; ждём только сборку образа
+    needs: [docker, migrate]         # деплой строго после сборки образа И миграции
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
