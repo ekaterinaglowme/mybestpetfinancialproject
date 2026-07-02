@@ -85,3 +85,11 @@ BLACK_LIST_PHASE_SECONDS = Histogram(
     ["phase"],
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, float("inf")),
 )
+
+# Итог похода в БКИ по заявке: ok — отчёт получен; no_history — бюро
+# ответило «сведений нет»; unavailable — обе попытки не удались (fail-open).
+BKI_RESULT = Counter(
+    "petbank_bki_result_total",
+    "Итоги обращений в БКИ по заявкам",
+    ["status"],
+)
