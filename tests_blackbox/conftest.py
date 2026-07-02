@@ -43,7 +43,7 @@ def _docker_available() -> bool:
 
 
 def _wait_health(url: str, timeout: float = 60.0) -> None:
-    """Опрос /health с таймаутом — без «магических» sleep."""
+    """Опрос служебной ручки до 200 с таймаутом — без «магических» sleep."""
     deadline = time.time() + timeout
     last_err: Exception | None = None
     while time.time() < deadline:
@@ -82,8 +82,10 @@ def _bring_up(compose_file: Path, base_url: str, db_port: str):
     )
 
     # 3. Приложение + мок СтопЛиста (собрать образ, ждать healthy).
+    #    Ждём /ready, а не /health: стенд «поднялся» = app доказал связность
+    #    с БД, иначе первые тесты могут стартовать раньше готовности.
     _compose(compose_file, "up", "-d", "--build", "--wait", "app", "blacklist", check=True)
-    _wait_health(f"{base_url}/health")
+    _wait_health(f"{base_url}/ready")
 
     try:
         yield base_url

@@ -24,6 +24,20 @@ def test_health_zhiv(base_url):
 
 
 @pytest.mark.blackbox
+def test_ready_gotov_prinimat_trafik(base_url):
+    """Сервис готов принимать трафик: связность с реальной БД доказана.
+
+    Дано: здоровый стенд (app + Postgres подняты).
+    Когда: GET /ready.
+    Тогда: 200 и тело {"status": "ready"} — единственная сквозная проверка
+           readiness через настоящий Postgres (юнит-тесты мокают сессию).
+    """
+    r = httpx.get(f"{base_url}/ready", timeout=10)
+    assert r.status_code == 200
+    assert r.json() == {"status": "ready"}
+
+
+@pytest.mark.blackbox
 def test_rate_limit_otdaet_429(strict_base_url):
     """Под градом запросов часть отклоняется кодом 429.
 
