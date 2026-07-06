@@ -104,3 +104,18 @@ async def test_loan_flags_returned_loan_is_clean(db_session):
     loan.repaid_at = date(2026, 6, 20)
     await db_session.flush()
     assert await get_user_loan_flags(db_session, user.id) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_loan_flags_isolated_between_users(db_session):
+    # Невозврат ЧУЖОГО пользователя не должен пачкать флаги нашего.
+    stranger, stranger_app = await _make_application(db_session, phone="+79990001122", amount=30000)
+    loan = await create_loan(
+        db_session, application_id=stranger_app, amount=30000,
+        issued_at=date(2026, 6, 1),
+    )
+    loan.status = "не вернули"
+    await db_session.flush()
+
+    our_user, _ = await _make_application(db_session, phone="+79995556677")
+    assert await get_user_loan_flags(db_session, our_user.id) == (False, False)
