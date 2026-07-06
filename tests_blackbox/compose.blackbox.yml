@@ -30,6 +30,18 @@ services:
       timeout: 3s
       retries: 15
 
+  bki:
+    image: python:3.13-slim
+    volumes:
+      - ./bki_mock.py:/mock/bki_mock.py:ro
+    command: python /mock/bki_mock.py
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
   app:
     build:
       context: ..               # корень репозитория, где лежит Dockerfile
@@ -41,6 +53,9 @@ services:
       DB_PASSWORD: petbank
       DB_DATABASE: petbank_test
       BLACK_LIST_URL: http://blacklist:8090
+      BKI_URL: http://bki:8091
+      # Функциональным тестам не нужна реальная пауза ретрая.
+      BKI_RETRY_DELAY_SECONDS: "0"
       # Функциональным сценариям защита от нагрузки не должна мешать.
       RATE_LIMIT_RPS: "1000"
     ports:
@@ -49,5 +64,7 @@ services:
       db:
         condition: service_healthy
       blacklist:
+        condition: service_healthy
+      bki:
         condition: service_healthy
     # healthcheck (GET /health) задан в самом образе (Dockerfile).

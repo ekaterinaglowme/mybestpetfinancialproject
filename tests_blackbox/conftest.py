@@ -81,10 +81,12 @@ def _bring_up(compose_file: Path, base_url: str, db_port: str):
         ["alembic", "upgrade", "head"], cwd=REPO_ROOT, env=alembic_env, check=True
     )
 
-    # 3. Приложение + мок СтопЛиста (собрать образ, ждать healthy).
+    # 3. Приложение + моки СтопЛиста и БКИ (собрать образ, ждать healthy).
     #    Ждём /ready, а не /health: стенд «поднялся» = app доказал связность
     #    с БД, иначе первые тесты могут стартовать раньше готовности.
-    _compose(compose_file, "up", "-d", "--build", "--wait", "app", "blacklist", check=True)
+    _compose(
+        compose_file, "up", "-d", "--build", "--wait", "app", "blacklist", "bki", check=True
+    )
     _wait_health(f"{base_url}/ready")
 
     try:
