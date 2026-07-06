@@ -35,6 +35,7 @@ from db import get_session
 from repository import create_loan, get_loan, get_or_create_user, save_application
 import black_list
 from black_list import BlackListError, check_passport
+from bki_parse import BkiFeatures
 
 from logging_setup import request_id_ctx, setup_logging
 from metrics import (APPLICATION_AMOUNT_RUB, DB_WRITE_SECONDS, DECISIONS,
@@ -215,8 +216,12 @@ def make_decision_v2(
     *,
     in_black_list: bool = False,
     black_list_check_failed: bool = False,
+    bki: BkiFeatures | None = None,
+    bki_check_failed: bool = False,
+    has_active_loan: bool = False,
+    has_prior_default: bool = False,
 ) -> dict:
-    """Решение по заявке v2: правила — возраст < MIN_AGE и чёрный список."""
+    """Решение по заявке v2: возраст, чёрный список, БКИ, внутренняя история."""
     today = date.today()
     age = calculate_age(payload.birth_date, today)
     application_id = str(uuid.uuid4())
@@ -241,6 +246,28 @@ def make_decision_v2(
         reason = "Не удалось проверить паспорт по чёрному списку — заявка отклонена"
         reasons.append(reason)
         REJECTION_REASONS.labels(reason="black_list_check_unavailable").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    # БКИ: bki=None без флага = «истории нет» (Код=3) — это НЕ отказ;
+    # недоступность бюро (bki_check_failed) — отказ, fail-closed как у ЧС.
+    if bki is not None and bki.has_current_delinquency:
+        reason = "Текущая просрочка или списание в кредитной истории"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="bki_delinquency").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if bki_check_failed:
+        reason = "Не удалось проверить кредитную историю — заявка отклонена"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="bki_check_unavailable").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if has_active_loan:
+        reason = "Активный заём уже есть"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="active_loan").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if has_prior_default:
+        reason = "Прошлый невозврат"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="prior_default").inc()
         logger.info("Заявка %s — отказ: %s", application_id, reason)
 
     status = "approved" if not reasons else "declined"
