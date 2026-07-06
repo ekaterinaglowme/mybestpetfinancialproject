@@ -16,6 +16,7 @@
 sequenceDiagram
     participant Front as Front (Web/Mobile)
     participant PetBank as PetBank API
+    participant BKI as БКИ (КредБюро)
     participant BlackList as Black List Service
     participant DB as PostgreSQL
     participant Client as Клиент
@@ -23,12 +24,19 @@ sequenceDiagram
     Front->>PetBank: POST /applications/v2<br/>email, passport, region, loan_purpose, ...
     Note right of PetBank: Валидация данных<br/>формат, обязательные поля
 
+    PetBank->>BKI: POST /report (XML, windows-1251)<br/>паспорт → кредитный отчёт
+    BKI-->>PetBank: отчёт: скоринг-балл, договоры, просрочки
+    Note right of PetBank: Сбой бюро → пауза 10 с, один повтор.<br/>Снова сбой → fail-closed: отказ,<br/>отчёт помечен «unavailable»
+
     PetBank->>BlackList: GET /check?passport={passport}
     BlackList-->>PetBank: { in_terror_list: true/false }
 
-    Note right of PetBank: Решение:<br/>возраст < 18 → declined<br/>паспорт в списке → declined<br/>СтопЛист недоступен → declined (fail-closed)<br/>иначе → approved
+    PetBank->>DB: Внутренняя история клиента<br/>активный заём? прошлый невозврат?
+    DB-->>PetBank: флаги по займам
 
-    PetBank->>DB: INSERT application<br/>данные заявки + решение
+    Note right of PetBank: Решение (причины суммируются):<br/>возраст < 18 → declined<br/>паспорт в списке → declined<br/>СтопЛист недоступен → declined (fail-closed)<br/>просрочка/списание в БКИ → declined<br/>БКИ недоступен → declined (fail-closed)<br/>активный заём → declined<br/>прошлый невозврат → declined<br/>иначе → approved
+
+    PetBank->>DB: INSERT application + bki_report<br/>заявка, решение, отчёт бюро (всегда)
     DB-->>PetBank: OK, application_id: UUID
 
     PetBank-->>Front: 200 OK<br/>{ application_id, status: approved/declined, reasons }
@@ -181,6 +189,18 @@ app/
   (по умолчанию `0.8`).
 
 Если сервис недоступен — заявка отклоняется (fail-closed).
+
+## БКИ (внешнее бюро кредитных отчётов)
+
+Ручка `POST /applications/v2` перед решением запрашивает кредитный отчёт у внешнего бюро:
+
+- `BKI_URL` — базовый адрес БКИ (по умолчанию `http://212.147.238.3:8091`).
+- `BKI_TIMEOUT_SECONDS` — таймаут запроса к бюро в секундах (по умолчанию `3.0`).
+- `BKI_RETRY_DELAY_SECONDS` — пауза перед единственным повтором при сбое бюро
+  (по умолчанию `10`; в тестах ставится `0`).
+- `BKI_PARTNER_CODE` — код партнёра в запросе к бюро (по умолчанию `PETBANK`).
+
+Если бюро недоступно при оба попытки — заявка отклоняется (fail-closed), отчёт в БД помечен как «unavailable».
 
 ## Чёрно-ящичные интеграционные тесты
 
