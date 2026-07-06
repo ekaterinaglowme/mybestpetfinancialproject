@@ -153,7 +153,9 @@ curl http://localhost:8000/health
 - По SSH на VM выполняет одной командой:
   `docker login ghcr.io` → `docker pull …:latest` → `docker rm -f petbank` →
   `docker run -d --restart unless-stopped --name petbank --memory=512m --cpus=0.5 -p 8000:8000 …`
-  → `sleep 10` → `curl /health` → `docker image prune -f` → `docker logout`.
+  → `sleep 10` → `curl /health` → `curl /ready` → `docker image prune -f` → `docker logout`.
+- `curl /ready` ловит выкатку со сломанной связностью к БД (неверные `DB_*`):
+  без него деплой зелёный, пока прод сыплет 500-ми.
 - Если `pull` упадёт — старый контейнер не трогается, прод продолжает работать.
 
 **Итог:** смёржила PR в `main` → если тесты зелёные, образ собрался и

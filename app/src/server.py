@@ -4,7 +4,8 @@
 
 Эндпоинты:
     POST /applications/v2  — подать заявку, вернёт решение approved / declined
-    GET  /health           — проверка, что сервер жив
+    GET  /health           — проверка, что сервер жив (liveness)
+    GET  /ready            — готовность принимать трафик: БД отвечает (readiness)
     GET  /                 — короткая справка
     GET  /docs             — Swagger UI (интерактивная документация)
 """
@@ -22,6 +23,7 @@ from typing import Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.exc import SQLAlchemyError
@@ -359,14 +361,24 @@ async def log_requests(request: Request, call_next):
 
 @app.get("/health")
 def health():
+    # Liveness: процесс жив и отвечает. НЕ проверяет зависимости (см. /ready).
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready():
+    # Readiness: готов принимать трафик, только если БД отвечает. Иначе 503 —
+    # балансировщик/Docker уводят трафик с этого инстанса, не плодя 500-е клиентам.
+    if await db.check_ready():
+        return {"status": "ready"}
+    return JSONResponse({"status": "not ready"}, status_code=503)
 
 
 @app.get("/")
 def root():
     return {
         "service": "PetBank",
-        "endpoints": ["POST /applications/v2", "GET /health", "GET /docs"],
+        "endpoints": ["POST /applications/v2", "GET /health", "GET /ready", "GET /docs"],
         "rule": f"возраст от {MIN_AGE}, паспорт не в чёрном списке",
     }
 

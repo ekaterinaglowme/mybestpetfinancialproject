@@ -78,6 +78,32 @@ paths:
                     type: string
                     example: ok
 
+  /ready:
+    get:
+      summary: Готовность принимать трафик (readiness)
+      operationId: readinessCheck
+      responses:
+        "200":
+          description: БД отвечает, инстанс готов принимать трафик
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+        "503":
+          description: БД недоступна или не ответила за таймаут
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: not ready
+
 components:
   schemas:
     ApplicationRequest:
