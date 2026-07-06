@@ -84,6 +84,20 @@ async def test_v2_missing_passport_422(async_client, clean_blacklist):
     assert resp.status_code == 422
 
 
+@pytest.mark.parametrize("bad_passport", [
+    "12345",                    # короче 10 цифр
+    "12345678901",              # длиннее 10 цифр
+    "abcdefghij",               # буквы
+    '1234" Номер="999999',      # инъекция в XML-запрос к бюро
+])
+async def test_v2_invalid_passport_422(async_client, clean_blacklist, bad_passport):
+    # Кривой паспорт отклоняется на валидации — до похода в бюро.
+    resp = await async_client.post(
+        "/applications/v2", json={**VALID, "passport": bad_passport},
+    )
+    assert resp.status_code == 422
+
+
 async def test_v2_loan_created_on_approval_with_amount(async_client, clean_blacklist):
     resp = await async_client.post("/applications/v2", json=VALID)
     assert resp.json()["status"] == "approved"

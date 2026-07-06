@@ -71,6 +71,10 @@ def _strip_required_nonempty(v: object) -> str:
 
 
 _EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+# Паспорт = ровно 10 цифр (серия+номер). Строгая проверка обязательна: паспорт
+# подставляется в XML-запрос к БКИ, произвольная строка = инъекция в протокол
+# бюро и битые запросы, оплачиваемые дорогими ретраями.
+_PASSPORT_RE = re.compile(r"\d{10}")
 
 
 class ApplicationBase(BaseModel):
@@ -155,10 +159,18 @@ class ApplicationRequestV2(ApplicationBase):
     region: str
     loan_purpose: Literal["покупка", "перекредитование"]
 
-    @field_validator("passport", "region", mode="before")
+    @field_validator("region", mode="before")
     @classmethod
     def _v_required_nonempty_v2(cls, v: object) -> str:
         return _strip_required_nonempty(v)
+
+    @field_validator("passport", mode="before")
+    @classmethod
+    def _v_passport(cls, v: object) -> str:
+        s = _strip_required_nonempty(v)
+        if not _PASSPORT_RE.fullmatch(s):
+            raise ValueError("Паспорт должен состоять ровно из 10 цифр")
+        return s
 
     @field_validator("email", mode="before")
     @classmethod
