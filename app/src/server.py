@@ -32,9 +32,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import db
 import loans
 from db import get_session
-from repository import create_loan, get_loan, get_or_create_user, save_application
+from repository import (create_loan, get_loan, get_or_create_user,
+                        get_user_loan_flags, save_application, save_bki_report)
 import black_list
 from black_list import BlackListError, check_passport
+import bki as bki_module
+from bki import get_report_with_retry
+from bki_parse import BkiFeatures
 
 from logging_setup import request_id_ctx, setup_logging
 from metrics import (APPLICATION_AMOUNT_RUB, DB_WRITE_SECONDS, DECISIONS,
@@ -67,6 +71,10 @@ def _strip_required_nonempty(v: object) -> str:
 
 
 _EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+# Паспорт = ровно 10 цифр (серия+номер). Строгая проверка обязательна: паспорт
+# подставляется в XML-запрос к БКИ, произвольная строка = инъекция в протокол
+# бюро и битые запросы, оплачиваемые дорогими ретраями.
+_PASSPORT_RE = re.compile(r"\d{10}")
 
 
 class ApplicationBase(BaseModel):
@@ -151,10 +159,18 @@ class ApplicationRequestV2(ApplicationBase):
     region: str
     loan_purpose: Literal["покупка", "перекредитование"]
 
-    @field_validator("passport", "region", mode="before")
+    @field_validator("region", mode="before")
     @classmethod
     def _v_required_nonempty_v2(cls, v: object) -> str:
         return _strip_required_nonempty(v)
+
+    @field_validator("passport", mode="before")
+    @classmethod
+    def _v_passport(cls, v: object) -> str:
+        s = _strip_required_nonempty(v)
+        if not _PASSPORT_RE.fullmatch(s):
+            raise ValueError("Паспорт должен состоять ровно из 10 цифр")
+        return s
 
     @field_validator("email", mode="before")
     @classmethod
@@ -215,8 +231,12 @@ def make_decision_v2(
     *,
     in_black_list: bool = False,
     black_list_check_failed: bool = False,
+    bki: BkiFeatures | None = None,
+    bki_check_failed: bool = False,
+    has_active_loan: bool = False,
+    has_prior_default: bool = False,
 ) -> dict:
-    """Решение по заявке v2: правила — возраст < MIN_AGE и чёрный список."""
+    """Решение по заявке v2: возраст, чёрный список, БКИ, внутренняя история."""
     today = date.today()
     age = calculate_age(payload.birth_date, today)
     application_id = str(uuid.uuid4())
@@ -241,6 +261,28 @@ def make_decision_v2(
         reason = "Не удалось проверить паспорт по чёрному списку — заявка отклонена"
         reasons.append(reason)
         REJECTION_REASONS.labels(reason="black_list_check_unavailable").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    # БКИ: bki=None без флага = «истории нет» (Код=3) — это НЕ отказ;
+    # недоступность бюро (bki_check_failed) — отказ, fail-closed как у ЧС.
+    if bki is not None and bki.has_current_delinquency:
+        reason = "Текущая просрочка или списание в кредитной истории"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="bki_delinquency").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if bki_check_failed:
+        reason = "Не удалось проверить кредитную историю — заявка отклонена"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="bki_check_unavailable").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if has_active_loan:
+        reason = "Активный заём уже есть"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="active_loan").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if has_prior_default:
+        reason = "Прошлый невозврат"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="prior_default").inc()
         logger.info("Заявка %s — отказ: %s", application_id, reason)
 
     status = "approved" if not reasons else "declined"
@@ -281,7 +323,12 @@ async def lifespan(app: FastAPI):
     own_bl = black_list._client is None      # в тестах клиент инжектят отдельно
     if own_bl:
         black_list.configure()
+    own_bki = bki_module._client is None
+    if own_bki:
+        bki_module.configure()
     yield
+    if own_bki:
+        await bki_module.dispose()
     if own_bl:
         await black_list.dispose()
     if own:
@@ -458,8 +505,12 @@ async def repay_loan(
 
 @app.post("/applications/v2", response_model=ApplicationDecision)
 async def create_application_v2(payload: ApplicationRequestV2):
-    # Чёрный список дёргаем ДО захвата сессии БД: иначе соединение из пула держится
-    # открытым весь внешний вызов, и под залпом заявок пул копит очередь.
+    # Внешние вызовы ДО захвата сессии БД: соединение из пула не должно
+    # висеть открытым, пока мы ходим по сети (паттерн из версии с ЧС).
+    # Порядок: БКИ первым — сейчас фаза сбора датасета, отчёт бюро нужен
+    # по КАЖДОЙ заявке, даже той, что отвалится на следующих проверках.
+    bki_fetched_at = datetime.now()
+    bki_outcome = await get_report_with_retry(payload.passport)
     try:
         in_black_list = await check_passport(payload.passport)
         check_failed = False
@@ -467,9 +518,6 @@ async def create_application_v2(payload: ApplicationRequestV2):
         logger.warning("Чёрный список недоступен — заявка отклонена (fail-closed)")
         in_black_list, check_failed = False, True
 
-    decision = make_decision_v2(
-        payload, in_black_list=in_black_list, black_list_check_failed=check_failed,
-    )
     try:
         async with db.transaction() as session:
             user = await get_or_create_user(
@@ -479,6 +527,19 @@ async def create_application_v2(payload: ApplicationRequestV2):
                 middle_name=payload.middle_name,
                 birth_date=payload.birth_date,
                 phone=payload.phone,
+            )
+            # Внутренняя история: активный заём / прошлый невозврат.
+            has_active_loan, has_prior_default = await get_user_loan_flags(
+                session, user.id,
+            )
+            decision = make_decision_v2(
+                payload,
+                in_black_list=in_black_list,
+                black_list_check_failed=check_failed,
+                bki=bki_outcome.features,
+                bki_check_failed=(bki_outcome.status == "unavailable"),
+                has_active_loan=has_active_loan,
+                has_prior_default=has_prior_default,
             )
             await save_application(
                 session,
@@ -494,6 +555,16 @@ async def create_application_v2(payload: ApplicationRequestV2):
                 region=payload.region,
                 loan_purpose=payload.loan_purpose,
             )
+            # Отчёт бюро сохраняем ВСЕГДА — и для отклонённых заявок:
+            # это строки будущего датасета скоркарты.
+            await save_bki_report(
+                session,
+                application_id=uuid.UUID(decision["application_id"]),
+                fetched_at=bki_fetched_at,
+                status=bki_outcome.status,
+                features=bki_outcome.features,
+                raw_xml=bki_outcome.raw_xml,
+            )
             # Одобрение с суммой = выдача займа (ключ — тот же application_id).
             if decision["status"] == "approved" and payload.amount:
                 await create_loan(
@@ -503,7 +574,7 @@ async def create_application_v2(payload: ApplicationRequestV2):
                     issued_at=date.today(),
                 )
     except SQLAlchemyError as exc:
-        logger.exception("Не удалось сохранить заявку %s", decision["application_id"])
+        logger.exception("Не удалось сохранить заявку")
         raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc
     return decision
 
