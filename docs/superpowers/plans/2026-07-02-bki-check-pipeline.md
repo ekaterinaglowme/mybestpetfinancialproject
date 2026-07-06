@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `POST /applications/v2` перед решением ходит в БКИ (XML windows-1251, ретрай, fail-open), сохраняет отчёт бюро рядом с заявкой и отказывает по трём новым правилам: текущая просрочка в БКИ, активный заём, прошлый невозврат.
+**Goal:** `POST /applications/v2` перед решением ходит в БКИ (XML windows-1251, ретрай, fail-closed), сохраняет отчёт бюро рядом с заявкой и отказывает по четырём новым правилам: текущая просрочка в БКИ, бюро недоступно, активный заём, прошлый невозврат.
+
+> ⚠️ ИЗМЕНЕНИЕ 2026-07-03 (решение пользователя, после выполнения Task 1–3): сбой БКИ = **fail-closed** (отказ), а не fail-open. Задачи 1–3 не затронуты (клиент лишь возвращает `status="unavailable"`); правки внесены в Task 4, 5, 6, 7. Упоминания fail-open в коде-образцах Task 2 (докстринги bki.py) исправляются в Task 5.
 
 **Architecture:** Два новых модуля по образцу `black_list.py`: чистый разбор протокола (`bki_parse.py`, без IO) и httpx-клиент с одним ретраем (`bki.py`). Новая таблица `bki_reports` (1:1 с заявкой, фичи колонками + сырой XML). Внешние вызовы — до транзакции БД; `make_decision_v2` переезжает внутрь транзакции (внутренние флаги требуют `user_id`).
 
@@ -941,11 +943,18 @@ def test_approved_with_clean_bki():
     assert d["status"] == "approved"
 
 
-def test_bki_unavailable_is_not_a_rejection():
-    # fail-open: нет фич бюро (None) — решение по остальным правилам.
+def test_no_history_is_not_a_rejection():
+    # «Истории нет» (Код=3) — валидный ответ бюро, не сбой: bki=None без флага.
     d = make_decision_v2(_payload(), bki=None)
     assert d["status"] == "approved"
     assert d["reasons"] == []
+
+
+def test_declined_when_bki_unavailable():
+    # fail-closed: бюро недоступно после ретрая — отказ (как у чёрного списка).
+    d = make_decision_v2(_payload(), bki=None, bki_check_failed=True)
+    assert d["status"] == "declined"
+    assert any("Не удалось проверить кредитную историю" in r for r in d["reasons"])
 
 
 def test_declined_on_active_loan():
@@ -989,6 +998,7 @@ def make_decision_v2(
     in_black_list: bool = False,
     black_list_check_failed: bool = False,
     bki: BkiFeatures | None = None,
+    bki_check_failed: bool = False,
     has_active_loan: bool = False,
     has_prior_default: bool = False,
 ) -> dict:
@@ -996,11 +1006,17 @@ def make_decision_v2(
 ```
 
 ```python
-    # БКИ: fail-open — bki=None (бюро недоступно/нет истории) отказом НЕ является.
+    # БКИ: bki=None без флага = «истории нет» (Код=3) — это НЕ отказ;
+    # недоступность бюро (bki_check_failed) — отказ, fail-closed как у ЧС.
     if bki is not None and bki.has_current_delinquency:
         reason = "Текущая просрочка или списание в кредитной истории"
         reasons.append(reason)
         REJECTION_REASONS.labels(reason="bki_delinquency").inc()
+        logger.info("Заявка %s — отказ: %s", application_id, reason)
+    if bki_check_failed:
+        reason = "Не удалось проверить кредитную историю — заявка отклонена"
+        reasons.append(reason)
+        REJECTION_REASONS.labels(reason="bki_check_unavailable").inc()
         logger.info("Заявка %s — отказ: %s", application_id, reason)
     if has_active_loan:
         reason = "Активный заём уже есть"
@@ -1105,19 +1121,31 @@ async def test_v2_declined_on_bki_delinquency(async_client, clean_blacklist, mon
     assert any("просрочка или списание" in r for r in body["reasons"])
 
 
-async def test_v2_bki_unavailable_fail_open(async_client, clean_blacklist, monkeypatch):
+async def test_v2_bki_unavailable_fail_closed(async_client, clean_blacklist, monkeypatch):
     async def fake(passport):
         return BkiOutcome(status="unavailable", features=None, raw_xml=None)
     monkeypatch.setattr(server, "get_report_with_retry", fake)
 
     resp = await async_client.post("/applications/v2", json=VALID)
+    assert resp.status_code == 200               # отказ — это 200 + declined, не 5xx
     body = resp.json()
-    assert body["status"] == "approved"          # fail-open: бюро молчит — не отказ
+    assert body["status"] == "declined"          # fail-closed: бюро молчит — отказ
+    assert any("Не удалось проверить кредитную историю" in r for r in body["reasons"])
     application_id = uuid_mod.UUID(body["application_id"])
     async with db.AsyncSessionLocal() as session:
         stored = await session.get(BkiReport, application_id)
-    assert stored.status == "unavailable"
+    assert stored.status == "unavailable"        # след сбоя сохранён и при отказе
     assert stored.score is None
+
+
+async def test_v2_no_history_is_approved(async_client, clean_blacklist, monkeypatch):
+    # «Истории нет» (Код=3) — валидный ответ, НЕ сбой: заявка одобряется.
+    async def fake(passport):
+        return BkiOutcome(status="no_history", features=None, raw_xml="<nohist/>")
+    monkeypatch.setattr(server, "get_report_with_retry", fake)
+
+    resp = await async_client.post("/applications/v2", json=VALID)
+    assert resp.json()["status"] == "approved"
 
 
 async def test_v2_declined_on_second_active_loan(async_client, clean_blacklist):
@@ -1214,6 +1242,7 @@ async def create_application_v2(payload: ApplicationRequestV2):
                 in_black_list=in_black_list,
                 black_list_check_failed=check_failed,
                 bki=bki_outcome.features,
+                bki_check_failed=(bki_outcome.status == "unavailable"),
                 has_active_loan=has_active_loan,
                 has_prior_default=has_prior_default,
             )
@@ -1259,6 +1288,25 @@ async def create_application_v2(payload: ApplicationRequestV2):
 `decision["application_id"]` — переменная может быть не определена, если упал
 `get_or_create_user`; поэтому сообщение без id)
 
+Дополнительно в этом же коммите — поправить устаревший докстринг `app/src/bki.py`
+(написан до смены решения на fail-closed). Заменить последние два предложения
+модульного докстринга:
+
+```python
+"""Клиент БКИ «КредБюро»: POST /report, XML windows-1251, один ретрай.
+
+Любой сбой (сеть / HTTP / битый XML / «повторите позже») → пауза
+BKI_RETRY_DELAY_SECONDS и одна повторная попытка; снова сбой → BkiOutcome
+со status="unavailable". Что делать со сбоем, решает вызывающий код:
+по решению пользователя это fail-closed — заявка отклоняется (как и при
+недоступном чёрном списке).
+"""
+```
+
+И в докстринге `get_report_with_retry` заменить «сбой = unavailable» оставить,
+а слово «fail-open» из комментария в `metrics.py` (описание BKI_RESULT), если
+оно там есть, заменить на «(вызывающий код отклоняет заявку — fail-closed)».
+
 - [ ] **Step 4: Прогнать весь сьют**
 
 Run: `.venv/bin/python -m pytest tests/ -q 2>&1 | tail -3`
@@ -1290,7 +1338,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Produces: мок бюро на :8091 с детерминированными паспортами:
   `"0000024949"` → Код=0 чистая история; `"6516841025"` → Код=3;
   `"0000990052"` → Код=0 со списанием и долгом (стоп-правило);
-  `"0000000009"` → Код=9 всегда (после ретрая → unavailable → fail-open).
+  `"0000000009"` → Код=9 всегда (после ретрая → unavailable → fail-closed: отказ).
   Прочие паспорта → Код=3 (не мешаем существующим us1–us4).
 
 - [ ] **Step 1: Написать `tests_blackbox/bki_mock.py`**
@@ -1313,7 +1361,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 CLEAN_PASSPORT = "0000024949"       # Код=0, история без просрочек
 NO_HISTORY_PASSPORT = "6516841025"  # Код=3, сведений нет
 DELINQUENT_PASSPORT = "0000990052"  # Код=0, списанный договор с долгом (стоп)
-DOWN_PASSPORT = "0000000009"        # Код=9 всегда → у приложения fail-open
+DOWN_PASSPORT = "0000000009"        # Код=9 всегда → у приложения fail-closed (отказ)
 
 _HEAD = '<?xml version="1.0" encoding="windows-1251"?>'
 
@@ -1432,9 +1480,9 @@ if __name__ == "__main__":
 """US-5. Пайплайн проверок: БКИ → чёрный список → внутренняя история.
 
 Чёрно-ящичные тесты: бьём по реальному HTTP поднятого приложения. Проверяем,
-что внешнее бюро реально участвует в решении, что его недоступность заявку
-НЕ роняет (fail-open), и что собственная история невозврата блокирует новую
-выдачу. Конкретные тексты причин — зона юнит-тестов; здесь — поведение.
+что внешнее бюро реально участвует в решении, что его недоступность даёт
+управляемый отказ (fail-closed: 200 + declined, НЕ 5xx), и что собственная
+история невозврата блокирует новую выдачу. Тексты причин — зона юнит-тестов.
 """
 
 import uuid
@@ -1492,20 +1540,20 @@ def test_bki_uchastvuet_v_reshenii(base_url):
 
 
 @pytest.mark.blackbox
-def test_nedostupnost_bki_ne_ronyaet_zayavku(base_url):
-    """Бюро «лежит» — заявка всё равно обрабатывается (fail-open).
+def test_nedostupnost_bki_daet_upravlyaemy_otkaz(base_url):
+    """Бюро «лежит» — управляемый отказ, а не падение сервиса (fail-closed).
 
     Дано: паспорт, по которому мок бюро всегда отвечает «повторите позже».
     Когда: подаём заявку.
-    Тогда: HTTP 200 и решение принято (approved — остальные проверки чистые).
-           Недоступность бюро не превращается ни в 5xx, ни в отказ.
+    Тогда: HTTP 200 (не 5xx — сервис жив) и решение «declined»: без
+           проверенной кредитной истории деньги не выдаём.
     """
     resp = httpx.post(
         f"{base_url}/applications/v2",
         json=_payload(BKI_DOWN, phone="+79995550003"), timeout=30,
     )
     assert resp.status_code == 200
-    assert resp.json()["status"] == "approved"
+    assert resp.json()["status"] == "declined"
 
 
 @pytest.mark.blackbox
@@ -1583,7 +1631,7 @@ sequenceDiagram
 
     PetBank->>BKI: POST /report (XML, windows-1251)<br/>паспорт → кредитный отчёт
     BKI-->>PetBank: отчёт: скоринг-балл, договоры, просрочки
-    Note right of PetBank: Сбой бюро → пауза 10 с, один повтор.<br/>Снова сбой → fail-open: едем дальше,<br/>отчёт помечен «unavailable»
+    Note right of PetBank: Сбой бюро → пауза 10 с, один повтор.<br/>Снова сбой → fail-closed: отказ,<br/>отчёт помечен «unavailable»
 
     PetBank->>BlackList: GET /check?passport={passport}
     BlackList-->>PetBank: { in_terror_list: true/false }
@@ -1591,7 +1639,7 @@ sequenceDiagram
     PetBank->>DB: Внутренняя история клиента<br/>активный заём? прошлый невозврат?
     DB-->>PetBank: флаги по займам
 
-    Note right of PetBank: Решение (причины суммируются):<br/>возраст < 18 → declined<br/>паспорт в списке → declined<br/>СтопЛист недоступен → declined (fail-closed)<br/>просрочка/списание в БКИ → declined<br/>активный заём → declined<br/>прошлый невозврат → declined<br/>иначе → approved
+    Note right of PetBank: Решение (причины суммируются):<br/>возраст < 18 → declined<br/>паспорт в списке → declined<br/>СтопЛист недоступен → declined (fail-closed)<br/>просрочка/списание в БКИ → declined<br/>БКИ недоступен → declined (fail-closed)<br/>активный заём → declined<br/>прошлый невозврат → declined<br/>иначе → approved
 
     PetBank->>DB: INSERT application + bki_report<br/>заявка, решение, отчёт бюро (всегда)
     DB-->>PetBank: OK, application_id: UUID
