@@ -87,7 +87,8 @@ BLACK_LIST_PHASE_SECONDS = Histogram(
 )
 
 # Итог похода в БКИ по заявке: ok — отчёт получен; no_history — бюро
-# ответило «сведений нет»; unavailable — обе попытки не удались (fail-open).
+# ответило «сведений нет»; unavailable — обе попытки не удались
+# (вызывающий код отклоняет заявку — fail-closed).
 BKI_RESULT = Counter(
     "petbank_bki_result_total",
     "Итоги обращений в БКИ по заявкам",

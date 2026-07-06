@@ -32,9 +32,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import db
 import loans
 from db import get_session
-from repository import create_loan, get_loan, get_or_create_user, save_application
+from repository import (create_loan, get_loan, get_or_create_user,
+                        get_user_loan_flags, save_application, save_bki_report)
 import black_list
 from black_list import BlackListError, check_passport
+import bki as bki_module
+from bki import get_report_with_retry
 from bki_parse import BkiFeatures
 
 from logging_setup import request_id_ctx, setup_logging
@@ -308,7 +311,12 @@ async def lifespan(app: FastAPI):
     own_bl = black_list._client is None      # в тестах клиент инжектят отдельно
     if own_bl:
         black_list.configure()
+    own_bki = bki_module._client is None
+    if own_bki:
+        bki_module.configure()
     yield
+    if own_bki:
+        await bki_module.dispose()
     if own_bl:
         await black_list.dispose()
     if own:
@@ -485,8 +493,12 @@ async def repay_loan(
 
 @app.post("/applications/v2", response_model=ApplicationDecision)
 async def create_application_v2(payload: ApplicationRequestV2):
-    # Чёрный список дёргаем ДО захвата сессии БД: иначе соединение из пула держится
-    # открытым весь внешний вызов, и под залпом заявок пул копит очередь.
+    # Внешние вызовы ДО захвата сессии БД: соединение из пула не должно
+    # висеть открытым, пока мы ходим по сети (паттерн из версии с ЧС).
+    # Порядок: БКИ первым — сейчас фаза сбора датасета, отчёт бюро нужен
+    # по КАЖДОЙ заявке, даже той, что отвалится на следующих проверках.
+    bki_fetched_at = datetime.now()
+    bki_outcome = await get_report_with_retry(payload.passport)
     try:
         in_black_list = await check_passport(payload.passport)
         check_failed = False
@@ -494,9 +506,6 @@ async def create_application_v2(payload: ApplicationRequestV2):
         logger.warning("Чёрный список недоступен — заявка отклонена (fail-closed)")
         in_black_list, check_failed = False, True
 
-    decision = make_decision_v2(
-        payload, in_black_list=in_black_list, black_list_check_failed=check_failed,
-    )
     try:
         async with db.transaction() as session:
             user = await get_or_create_user(
@@ -506,6 +515,19 @@ async def create_application_v2(payload: ApplicationRequestV2):
                 middle_name=payload.middle_name,
                 birth_date=payload.birth_date,
                 phone=payload.phone,
+            )
+            # Внутренняя история: активный заём / прошлый невозврат.
+            has_active_loan, has_prior_default = await get_user_loan_flags(
+                session, user.id,
+            )
+            decision = make_decision_v2(
+                payload,
+                in_black_list=in_black_list,
+                black_list_check_failed=check_failed,
+                bki=bki_outcome.features,
+                bki_check_failed=(bki_outcome.status == "unavailable"),
+                has_active_loan=has_active_loan,
+                has_prior_default=has_prior_default,
             )
             await save_application(
                 session,
@@ -521,6 +543,16 @@ async def create_application_v2(payload: ApplicationRequestV2):
                 region=payload.region,
                 loan_purpose=payload.loan_purpose,
             )
+            # Отчёт бюро сохраняем ВСЕГДА — и для отклонённых заявок:
+            # это строки будущего датасета скоркарты.
+            await save_bki_report(
+                session,
+                application_id=uuid.UUID(decision["application_id"]),
+                fetched_at=bki_fetched_at,
+                status=bki_outcome.status,
+                features=bki_outcome.features,
+                raw_xml=bki_outcome.raw_xml,
+            )
             # Одобрение с суммой = выдача займа (ключ — тот же application_id).
             if decision["status"] == "approved" and payload.amount:
                 await create_loan(
@@ -530,7 +562,7 @@ async def create_application_v2(payload: ApplicationRequestV2):
                     issued_at=date.today(),
                 )
     except SQLAlchemyError as exc:
-        logger.exception("Не удалось сохранить заявку %s", decision["application_id"])
+        logger.exception("Не удалось сохранить заявку")
         raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc
     return decision
 
