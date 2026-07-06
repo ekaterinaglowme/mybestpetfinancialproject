@@ -102,6 +102,7 @@ POST /applications/v2
 | `score` | Integer, nullable | балл бюро (SCR-11) |
 | `n_contracts` | Integer, nullable | |
 | `has_writeoff` | Boolean, nullable | договор 52/59 в истории |
+| `has_current_delinquency` | Boolean, nullable | стоп-правило: договор 52/59 И просрочка > 0 |
 | `overdue_amount_kop` | BigInteger, nullable | суммы храним в копейках, как отдаёт бюро |
 | `max_dpd` | Integer, nullable | ранг худшего символа ПлтСтроки |
 | `n_late` | Integer, nullable | |
@@ -156,8 +157,8 @@ NULL, `raw_xml` сохранён.
 - **Blackbox (tests_blackbox/)**: `bki_mock.py` (stdlib, по образцу
   `blacklist_mock.py`; детерминированные паспорта: с чистой историей / без
   истории / со списанием / «тормозит») в docker-compose обоих стендов;
-  сценарии user story: отказ по просрочке в БКИ; бюро лежит → заявка одобрена
-  (fail-closed: отказ, но HTTP 200, не 5xx); отказ по своему прошлому
+  сценарии user story: отказ по просрочке в БКИ; бюро лежит → отказ
+  (fail-closed), но HTTP 200, не 5xx; отказ по своему прошлому
   невозврату. Формат — как в существующих
   blackbox-тестах: сначала русское описание user story, потом код; проверяем
   контракт и интеграцию, не бизнес-константы.
