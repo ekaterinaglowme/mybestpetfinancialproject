@@ -25,7 +25,11 @@ from metrics import BKI_RESULT, EXTERNAL_CALL_SECONDS
 
 BKI_URL = os.environ.get("BKI_URL", "http://212.147.238.3:8091")
 BKI_TIMEOUT_SECONDS = float(os.environ.get("BKI_TIMEOUT_SECONDS", "3.0"))
-BKI_RETRY_DELAY_SECONDS = float(os.environ.get("BKI_RETRY_DELAY_SECONDS", "10"))
+# Пауза перед единственным повтором. Мала намеренно: вызов синхронный, на
+# горячем пути заявки — держать клиента лишние секунды нельзя. Бюро за паузу
+# «оживает» редко, а p95 /applications страдает у всех. Прод-инцидент 2026-07-09:
+# было 10с → хвост ~16с на недоступных заявках раздувал латентность.
+BKI_RETRY_DELAY_SECONDS = float(os.environ.get("BKI_RETRY_DELAY_SECONDS", "0.5"))
 BKI_PARTNER_CODE = os.environ.get("BKI_PARTNER_CODE", "PETBANK")
 
 logger = logging.getLogger("petbank.bki")
