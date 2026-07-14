@@ -3,8 +3,8 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import (BigInteger, Boolean, CheckConstraint, ForeignKey, Integer,
-                        Numeric, String, Text, UniqueConstraint, func)
+from sqlalchemy import (BigInteger, Boolean, CheckConstraint, ForeignKey, Index,
+                        Integer, Numeric, String, Text, UniqueConstraint, func)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON, Date, DateTime, Uuid
@@ -117,3 +117,35 @@ class BkiReport(Base):
     inq_90: Mapped[int | None] = mapped_column(Integer, nullable=True)
     inq_365: Mapped[int | None] = mapped_column(Integer, nullable=True)
     raw_xml: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ExternalServiceCall(Base):
+    """Журнал вызовов внешних сервисов (ЧС, БКИ, будущие): запрос+ответ в JSON.
+
+    Append-only: каждый вызов — отдельная строка. `payload` — весь запрос/ответ,
+    приведённый к JSON (JSONB на Postgres, JSON на SQLite в тестах). Служебные поля
+    вынесены колонками для быстрых выборок; само содержимое — в блобе.
+    """
+
+    __tablename__ = "external_service_calls"
+    __table_args__ = (
+        Index("ix_esc_application_id", "application_id"),
+        Index("ix_esc_service_called_at", "service", "called_at"),
+    )
+
+    # BigInteger на Postgres; на SQLite (тесты) — Integer, иначе не автоинкрементит PK.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True, autoincrement=True,
+    )
+    service: Mapped[str] = mapped_column(String)
+    application_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("applications.application_id"), nullable=True
+    )
+    called_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    status: Mapped[str | None] = mapped_column(String, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payload: Mapped[dict | None] = mapped_column(ReasonsType, nullable=True)

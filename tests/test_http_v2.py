@@ -7,8 +7,9 @@ import db
 import server
 from bki import BkiOutcome
 from bki_parse import BkiFeatures
-from models import BkiReport
+from models import ExternalServiceCall
 from repository import create_loan
+from sqlalchemy import select
 
 VALID = {
     "last_name": "Иванов", "first_name": "Иван", "phone": "+79991234567",
@@ -132,16 +133,20 @@ async def test_v2_persisted(async_client, clean_blacklist):
     assert row.email == "ivan@example.ru"
 
 
-async def test_v2_saves_bki_report(async_client, clean_blacklist):
+async def test_v2_logs_bki_call_to_journal(async_client, clean_blacklist):
+    # БКИ собирается в фоне и пишется в JSON-журнал (не в типизированные колонки).
     resp = await async_client.post("/applications/v2", json=VALID)
-    assert resp.status_code == 200
     application_id = uuid_mod.UUID(resp.json()["application_id"])
     async with db.AsyncSessionLocal() as session:
-        stored = await session.get(BkiReport, application_id)
-    assert stored is not None
-    assert stored.status == "ok"
-    assert stored.score == 702
-    assert stored.raw_xml == "<ok/>"
+        rows = (await session.execute(
+            select(ExternalServiceCall).where(
+                ExternalServiceCall.application_id == application_id,
+                ExternalServiceCall.service == "bki",
+            )
+        )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].status == "ok"
+    assert rows[0].payload["response"] == {"ok": ""}  # xml_to_dict("<ok/>")
 
 
 async def test_v2_bki_delinquency_no_longer_declines(async_client, clean_blacklist, monkeypatch):
@@ -169,9 +174,15 @@ async def test_v2_bki_unavailable_does_not_affect_decision(async_client, clean_b
     assert body["status"] == "approved"          # бюро не влияет на решение
     application_id = uuid_mod.UUID(body["application_id"])
     async with db.AsyncSessionLocal() as session:
-        stored = await session.get(BkiReport, application_id)
-    assert stored.status == "unavailable"        # но данные для статистики собраны
-    assert stored.score is None
+        rows = (await session.execute(
+            select(ExternalServiceCall).where(
+                ExternalServiceCall.application_id == application_id,
+                ExternalServiceCall.service == "bki",
+            )
+        )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].status == "unavailable"        # но данные для статистики собраны
+    assert rows[0].payload["response"] is None    # сырого ответа не было
 
 
 async def test_v2_no_history_is_approved(async_client, clean_blacklist, monkeypatch):
@@ -204,3 +215,18 @@ async def test_v2_prior_default_no_longer_declines(async_client, clean_blacklist
     assert repay.status_code == 200
     second = await async_client.post("/applications/v2", json=VALID)
     assert second.json()["status"] == "approved"
+
+
+async def test_v2_logs_blacklist_call_to_journal(async_client, clean_blacklist):
+    # Вызов чёрного списка тоже пишется в единый JSON-журнал.
+    resp = await async_client.post("/applications/v2", json=VALID)
+    application_id = uuid_mod.UUID(resp.json()["application_id"])
+    async with db.AsyncSessionLocal() as session:
+        rows = (await session.execute(
+            select(ExternalServiceCall).where(
+                ExternalServiceCall.application_id == application_id,
+                ExternalServiceCall.service == "stoplist",
+            )
+        )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].payload["response"] == {"in_terror_list": False}

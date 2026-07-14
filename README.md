@@ -29,7 +29,7 @@ sequenceDiagram
 
     Note right of PetBank: Решение — только возраст + чёрный список:<br/>возраст < 18 → declined<br/>паспорт в списке → declined<br/>СтопЛист недоступен → declined (fail-closed)<br/>иначе → approved
 
-    PetBank->>DB: INSERT application (+ заём при approved с суммой)
+    PetBank->>DB: INSERT application + вызов ЧС в журнал (JSON)<br/>(+ заём при approved с суммой)
     DB-->>PetBank: OK, application_id: UUID
 
     PetBank-->>Front: 200 OK<br/>{ application_id, status: approved/declined, reasons }
@@ -38,7 +38,7 @@ sequenceDiagram
     Note right of PetBank: Дальше — в фоне, после ответа клиенту
     PetBank->>BKI: POST /report (XML, windows-1251)<br/>паспорт → кредитный отчёт
     BKI-->>PetBank: отчёт: балл, договоры, просрочки<br/>(сбой → пауза, повтор; на решение НЕ влияет)
-    PetBank->>DB: INSERT bki_report<br/>данные для скоркарты (по каждой заявке)
+    PetBank->>DB: INSERT вызова БКИ в журнал external_service_calls (JSON)<br/>весь ответ бюро — данные для скоркарты
 ```
 
 > Поддерживать в актуальном состоянии: при изменении ручек/полей/правил

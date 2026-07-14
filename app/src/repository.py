@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bki_parse import BkiFeatures
 from metrics import DB_WRITE_SECONDS
-from models import Application, BkiReport, Loan, User
+from models import Application, BkiReport, ExternalServiceCall, Loan, User
 
 
 async def get_or_create_user(
@@ -143,3 +143,33 @@ async def get_user_loan_flags(
     )
     statuses = set((await session.execute(stmt)).scalars())
     return "выдано" in statuses, "не вернули" in statuses
+
+
+async def save_external_call(
+    session: AsyncSession,
+    *,
+    service: str,
+    application_id: uuid.UUID | None,
+    request: dict | None,
+    response: dict | None,
+    status: str | None = None,
+    http_status: int | None = None,
+    latency_ms: int | None = None,
+) -> int:
+    """Записать один вызов внешнего сервиса в журнал (append-only). Возвращает id.
+
+    `payload` собирается как {request, response}; весь ответ хранится в JSON —
+    типизированных колонок под конкретный сервис нет.
+    """
+    call = ExternalServiceCall(
+        service=service,
+        application_id=application_id,
+        status=status,
+        http_status=http_status,
+        latency_ms=latency_ms,
+        payload={"request": request, "response": response},
+    )
+    session.add(call)
+    with DB_WRITE_SECONDS.labels(operation="save_external_call").time():
+        await session.flush()
+    return call.id

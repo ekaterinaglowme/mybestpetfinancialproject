@@ -136,3 +136,30 @@ def _extract_features(root: ET.Element) -> BkiFeatures:
         inq_90=inq_90,
         inq_365=inq_365,
     )
+
+
+def xml_to_dict(raw: str) -> dict:
+    """XML-строка → словарь для JSON-журнала.
+
+    Атрибуты с префиксом `@`, текст листа — как значение, смешанный текст — `#text`,
+    повторяющиеся теги — списком. Без потерь структуры бюро, но пригодно для JSONB.
+    """
+    root = ET.fromstring(raw)
+    return {root.tag: _elem_to_value(root)}
+
+
+def _elem_to_value(elem: ET.Element):
+    text = (elem.text or "").strip()
+    if len(elem) == 0 and not elem.attrib:
+        return text  # лист — просто текст
+    result: dict = {f"@{k}": v for k, v in elem.attrib.items()}
+    for child in elem:
+        value = _elem_to_value(child)
+        if child.tag in result:
+            existing = result[child.tag]
+            result[child.tag] = existing + [value] if isinstance(existing, list) else [existing, value]
+        else:
+            result[child.tag] = value
+    if text:
+        result["#text"] = text
+    return result

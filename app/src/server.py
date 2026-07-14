@@ -33,12 +33,12 @@ import db
 import loans
 from db import get_session
 from repository import (create_loan, get_loan, get_or_create_user,
-                        save_application, save_bki_report)
+                        save_application, save_external_call)
 import black_list
 from black_list import BlackListError, check_passport
 import bki as bki_module
 from bki import get_report_with_retry
-from bki_parse import BkiFeatures
+from bki_parse import BkiFeatures, xml_to_dict
 
 from logging_setup import request_id_ctx, setup_logging
 from metrics import (APPLICATION_AMOUNT_RUB, DB_WRITE_SECONDS, DECISIONS,
@@ -504,26 +504,22 @@ async def repay_loan(
 
 
 async def collect_bki_report(application_id: uuid.UUID, passport: str) -> None:
-    """Фоновый сбор отчёта БКИ по заявке — накопление данных под скоркарту.
+    """Фоновый сбор отчёта БКИ по заявке — в JSON-журнал external_service_calls.
 
     Идёт ВНЕ горячего пути (после ответа клиенту), в своей транзакции. На решение
-    по заявке НЕ влияет: любой исход бюро (в т.ч. недоступность) просто фиксируется
-    в bki_reports как строка будущего датасета «уровня доверия».
+    не влияет: весь ответ бюро (приведённый к JSON) копится для будущей скоркарты.
     """
-    fetched_at = datetime.now()
     outcome = await get_report_with_retry(passport)
+    response = xml_to_dict(outcome.raw_xml) if outcome.raw_xml else None
     try:
         async with db.transaction() as session:
-            await save_bki_report(
-                session,
-                application_id=application_id,
-                fetched_at=fetched_at,
+            await save_external_call(
+                session, service="bki", application_id=application_id,
+                request={"passport": passport}, response=response,
                 status=outcome.status,
-                features=outcome.features,
-                raw_xml=outcome.raw_xml,
             )
     except SQLAlchemyError:
-        logger.exception("Не удалось сохранить отчёт БКИ по заявке %s", application_id)
+        logger.exception("Не удалось записать вызов БКИ по заявке %s", application_id)
 
 
 @app.post("/applications/v2", response_model=ApplicationDecision)
@@ -535,9 +531,11 @@ async def create_application_v2(
     try:
         in_black_list = await check_passport(payload.passport)
         check_failed = False
+        bl_response, bl_status = {"in_terror_list": in_black_list}, "ok"
     except BlackListError:
         logger.warning("Чёрный список недоступен — заявка отклонена (fail-closed)")
         in_black_list, check_failed = False, True
+        bl_response, bl_status = None, "unavailable"
 
     try:
         async with db.transaction() as session:
@@ -567,6 +565,13 @@ async def create_application_v2(
                 passport=payload.passport,
                 region=payload.region,
                 loan_purpose=payload.loan_purpose,
+            )
+            # Вызов чёрного списка — в единый JSON-журнал внешних сервисов.
+            await save_external_call(
+                session, service="stoplist",
+                application_id=uuid.UUID(decision["application_id"]),
+                request={"passport": payload.passport}, response=bl_response,
+                status=bl_status,
             )
             # Одобрение с суммой = выдача займа (ключ — тот же application_id).
             if decision["status"] == "approved" and payload.amount:
