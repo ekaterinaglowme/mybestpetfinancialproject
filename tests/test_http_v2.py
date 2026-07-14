@@ -1,3 +1,4 @@
+import logging
 import uuid as uuid_mod
 from datetime import date
 
@@ -205,3 +206,50 @@ async def test_v2_declined_after_prior_default(async_client, clean_blacklist):
     body = second.json()
     assert body["status"] == "declined"
     assert any("невозврат" in r for r in body["reasons"])
+
+
+def _bki_outcome_records(caplog):
+    return [r for r in caplog.records if getattr(r, "event", None) == "bki_outcome"]
+
+
+async def test_v2_logs_bki_outcome_ok(async_client, clean_blacklist, caplog):
+    caplog.set_level(logging.INFO)
+    resp = await async_client.post("/applications/v2", json=VALID)
+    assert resp.status_code == 200
+    recs = _bki_outcome_records(caplog)
+    assert len(recs) == 1
+    r = recs[0]
+    assert r.bki_status == "ok"
+    assert r.bki_score == 702
+    assert r.bki_delinquency is False
+    assert r.decision == "approved"
+    assert r.application_id == resp.json()["application_id"]
+
+
+async def test_v2_logs_bki_outcome_no_history(async_client, clean_blacklist, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    async def fake(passport):
+        return BkiOutcome(status="no_history", features=None, raw_xml="<n/>")
+    monkeypatch.setattr(server, "get_report_with_retry", fake)
+    resp = await async_client.post("/applications/v2", json=VALID)
+    recs = _bki_outcome_records(caplog)
+    assert len(recs) == 1
+    r = recs[0]
+    assert r.bki_status == "no_history"
+    assert r.bki_score is None
+    assert r.bki_delinquency is None
+    assert r.decision == "approved"
+
+
+async def test_v2_logs_bki_outcome_unavailable(async_client, clean_blacklist, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    async def fake(passport):
+        return BkiOutcome(status="unavailable", features=None, raw_xml=None)
+    monkeypatch.setattr(server, "get_report_with_retry", fake)
+    resp = await async_client.post("/applications/v2", json=VALID)
+    recs = _bki_outcome_records(caplog)
+    assert len(recs) == 1
+    r = recs[0]
+    assert r.bki_status == "unavailable"
+    assert r.bki_score is None
+    assert r.decision == "declined"

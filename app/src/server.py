@@ -541,6 +541,25 @@ async def create_application_v2(payload: ApplicationRequestV2):
                 has_active_loan=has_active_loan,
                 has_prior_default=has_prior_default,
             )
+            # Структурный лог итога БКИ по заявке — для аналитики в Loki
+            # (event="bki_outcome"). Только статус/балл/флаг, без ПДн.
+            bki_score = bki_outcome.features.score if bki_outcome.features else None
+            bki_delinquency = (
+                bki_outcome.features.has_current_delinquency
+                if bki_outcome.features else None
+            )
+            logger.info(
+                "Заявка %s — БКИ: %s (балл %s)",
+                decision["application_id"], bki_outcome.status, bki_score,
+                extra={
+                    "event": "bki_outcome",
+                    "application_id": decision["application_id"],
+                    "bki_status": bki_outcome.status,
+                    "bki_score": bki_score,
+                    "bki_delinquency": bki_delinquency,
+                    "decision": decision["status"],
+                },
+            )
             await save_application(
                 session,
                 application_id=uuid.UUID(decision["application_id"]),

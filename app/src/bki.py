@@ -21,7 +21,7 @@ from bki_parse import (
     build_request_xml,
     parse_report,
 )
-from metrics import BKI_RESULT, EXTERNAL_CALL_SECONDS
+from metrics import BKI_RESULT, BKI_SCORE, EXTERNAL_CALL_SECONDS
 
 BKI_URL = os.environ.get("BKI_URL", "http://212.147.238.3:8091")
 BKI_TIMEOUT_SECONDS = float(os.environ.get("BKI_TIMEOUT_SECONDS", "3.0"))
@@ -109,6 +109,8 @@ async def get_report_with_retry(passport: str) -> BkiOutcome:
             logger.warning("БКИ: неизвестный КодРезультата=%d", parsed.result_code)
             status = "unavailable"
         BKI_RESULT.labels(status=status).inc()
+        if parsed.features is not None and parsed.features.score is not None:
+            BKI_SCORE.observe(parsed.features.score)
         return BkiOutcome(status=status, features=parsed.features, raw_xml=_decode(raw))
 
     BKI_RESULT.labels(status="unavailable").inc()

@@ -112,3 +112,36 @@ async def test_http_403_is_unavailable(bki_client):
     bki_client(lambda request: httpx.Response(403, text="wrong partner"))
     outcome = await bki.get_report_with_retry("1234567890")
     assert outcome.status == "unavailable"
+
+
+def _hist_sum_count(h):
+    """(_sum, _count) гистограммы через публичный collect() (без приватных атрибутов)."""
+    s = c = 0.0
+    for metric in h.collect():
+        for sample in metric.samples:
+            if sample.name.endswith("_sum"):
+                s = sample.value
+            elif sample.name.endswith("_count"):
+                c = sample.value
+    return s, c
+
+
+@pytest.mark.asyncio
+async def test_bki_score_observed_on_ok(bki_client):
+    from metrics import BKI_SCORE
+    s0, c0 = _hist_sum_count(BKI_SCORE)
+    bki_client(lambda request: httpx.Response(200, content=CLEAN_XML))
+    await bki.get_report_with_retry("1234567890")
+    s1, c1 = _hist_sum_count(BKI_SCORE)
+    assert s1 == s0 + 702   # балл из CLEAN_XML
+    assert c1 == c0 + 1
+
+
+@pytest.mark.asyncio
+async def test_bki_score_not_observed_without_features(bki_client):
+    from metrics import BKI_SCORE
+    _, c0 = _hist_sum_count(BKI_SCORE)
+    bki_client(lambda request: httpx.Response(200, content=NO_HISTORY_XML))
+    await bki.get_report_with_retry("6516841025")
+    _, c1 = _hist_sum_count(BKI_SCORE)
+    assert c1 == c0   # нет истории → балл не наблюдаем
