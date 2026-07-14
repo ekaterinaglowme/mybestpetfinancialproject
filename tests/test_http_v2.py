@@ -144,31 +144,33 @@ async def test_v2_saves_bki_report(async_client, clean_blacklist):
     assert stored.raw_xml == "<ok/>"
 
 
-async def test_v2_declined_on_bki_delinquency(async_client, clean_blacklist, monkeypatch):
+async def test_v2_bki_delinquency_no_longer_declines(async_client, clean_blacklist, monkeypatch):
+    # MVP: БКИ ушёл из решения — просрочка в бюро больше НЕ заворачивает заявку.
     async def fake(passport):
         return BkiOutcome(status="ok", features=_features(delinquent=True), raw_xml="<bad/>")
     monkeypatch.setattr(server, "get_report_with_retry", fake)
 
     resp = await async_client.post("/applications/v2", json=VALID)
     body = resp.json()
-    assert body["status"] == "declined"
-    assert any("просрочка или списание" in r for r in body["reasons"])
+    assert body["status"] == "approved"
+    assert body["reasons"] == []
 
 
-async def test_v2_bki_unavailable_fail_closed(async_client, clean_blacklist, monkeypatch):
+async def test_v2_bki_unavailable_does_not_affect_decision(async_client, clean_blacklist, monkeypatch):
+    # MVP: БКИ ушёл из решения — недоступность бюро НЕ заворачивает заявку,
+    # но её след (unavailable) всё равно копится в bki_reports (фоновый сбор).
     async def fake(passport):
         return BkiOutcome(status="unavailable", features=None, raw_xml=None)
     monkeypatch.setattr(server, "get_report_with_retry", fake)
 
     resp = await async_client.post("/applications/v2", json=VALID)
-    assert resp.status_code == 200               # отказ — это 200 + declined, не 5xx
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "declined"          # fail-closed: бюро молчит — отказ
-    assert any("Не удалось проверить кредитную историю" in r for r in body["reasons"])
+    assert body["status"] == "approved"          # бюро не влияет на решение
     application_id = uuid_mod.UUID(body["application_id"])
     async with db.AsyncSessionLocal() as session:
         stored = await session.get(BkiReport, application_id)
-    assert stored.status == "unavailable"        # след сбоя сохранён и при отказе
+    assert stored.status == "unavailable"        # но данные для статистики собраны
     assert stored.score is None
 
 
@@ -182,18 +184,17 @@ async def test_v2_no_history_is_approved(async_client, clean_blacklist, monkeypa
     assert resp.json()["status"] == "approved"
 
 
-async def test_v2_declined_on_second_active_loan(async_client, clean_blacklist):
-    # Первая заявка одобрена с суммой → заём «выдано».
+async def test_v2_active_loan_no_longer_declines(async_client, clean_blacklist):
+    # MVP: внутренняя история ушла из решения — активный заём больше НЕ заворачивает.
     first = await async_client.post("/applications/v2", json=VALID)
     assert first.json()["status"] == "approved"
-    # Вторая заявка того же человека (тот же VALID = тот же identity) → отказ.
+    # Вторая заявка того же человека (тот же VALID = тот же identity) → тоже одобрена.
     second = await async_client.post("/applications/v2", json=VALID)
-    body = second.json()
-    assert body["status"] == "declined"
-    assert any("Активный заём" in r for r in body["reasons"])
+    assert second.json()["status"] == "approved"
 
 
-async def test_v2_declined_after_prior_default(async_client, clean_blacklist):
+async def test_v2_prior_default_no_longer_declines(async_client, clean_blacklist):
+    # MVP: прошлый невозврат больше НЕ влияет на решение (история ушла из решения).
     first = await async_client.post("/applications/v2", json=VALID)
     application_id = first.json()["application_id"]
     # Фиксируем невозврат существующей ручкой.
@@ -202,6 +203,4 @@ async def test_v2_declined_after_prior_default(async_client, clean_blacklist):
     )
     assert repay.status_code == 200
     second = await async_client.post("/applications/v2", json=VALID)
-    body = second.json()
-    assert body["status"] == "declined"
-    assert any("невозврат" in r for r in body["reasons"])
+    assert second.json()["status"] == "approved"
