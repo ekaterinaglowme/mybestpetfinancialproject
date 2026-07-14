@@ -1,9 +1,9 @@
-"""US-5. Пайплайн проверок: БКИ → чёрный список → внутренняя история.
+"""US-5. Решение по возрасту и чёрному списку; БКИ — фоновый сбор данных.
 
 Чёрно-ящичные тесты: бьём по реальному HTTP поднятого приложения. Проверяем,
-что внешнее бюро реально участвует в решении, что его недоступность даёт
-управляемый отказ (fail-closed: 200 + declined, НЕ 5xx), и что собственная
-история невозврата блокирует новую выдачу. Тексты причин — зона юнит-тестов.
+что решение принимается БЕЗ бюро (только возраст + чёрный список), а БКИ ушёл
+с горячего пути — его ответ (и недоступность) на решение не влияют. Сбор
+БКИ-данных идёт в фоне; проверка самих данных — зона юнит-тестов.
 """
 
 import uuid
@@ -38,14 +38,13 @@ def _payload(passport: str, phone: str) -> dict:
 
 
 @pytest.mark.blackbox
-def test_bki_uchastvuet_v_reshenii(base_url):
-    """Кредитная история из бюро реально влияет на решение.
+def test_bki_ne_vliyaet_na_reshenie(base_url):
+    """Ответ бюро больше НЕ влияет на решение (БКИ ушёл в фоновый сбор).
 
-    Дано: два одинаковых заявителя, различаются ТОЛЬКО паспортом — по одному
-          бюро отдаёт чистую историю, по другому — списанный договор с долгом.
+    Дано: два заявителя, различаются ТОЛЬКО паспортом — по одному бюро отдаёт
+          чистую историю, по другому списанный договор с долгом.
     Когда: подаём обе заявки на POST /applications/v2.
-    Тогда: оба запроса — HTTP 200, но решения ПРОТИВОПОЛОЖНЫ. Значит, ответ
-           бюро дошёл до решения (мы туда сходили и его учли).
+    Тогда: оба HTTP 200 и оба approved — просрочка в бюро решение не заворачивает.
     """
     ok = httpx.post(
         f"{base_url}/applications/v2",
@@ -57,34 +56,34 @@ def test_bki_uchastvuet_v_reshenii(base_url):
     )
     assert ok.status_code == 200 and bad.status_code == 200
     assert ok.json()["status"] == "approved"
-    assert bad.json()["status"] == "declined"
+    assert bad.json()["status"] == "approved"
 
 
 @pytest.mark.blackbox
-def test_nedostupnost_bki_daet_upravlyaemy_otkaz(base_url):
-    """Бюро «лежит» — управляемый отказ, а не падение сервиса (fail-closed).
+def test_nedostupnost_bki_ne_zavorachivaet(base_url):
+    """Бюро «лежит» — заявка всё равно одобрена (БКИ не на горячем пути).
 
     Дано: паспорт, по которому мок бюро всегда отвечает «повторите позже».
     Когда: подаём заявку.
-    Тогда: HTTP 200 (не 5xx — сервис жив) и решение «declined»: без
-           проверенной кредитной истории деньги не выдаём.
+    Тогда: HTTP 200 и approved — недоступность бюро на решение не влияет
+           (данные соберутся в фоне как «unavailable»).
     """
     resp = httpx.post(
         f"{base_url}/applications/v2",
         json=_payload(BKI_DOWN, phone="+79995550003"), timeout=30,
     )
     assert resp.status_code == 200
-    assert resp.json()["status"] == "declined"
+    assert resp.json()["status"] == "approved"
 
 
 @pytest.mark.blackbox
-def test_sobstvenniy_nevozvrat_blokiruet_novuyu_vydachu(base_url):
-    """Клиент не вернул наш заём → новую заявку не одобряем.
+def test_sobstvenniy_nevozvrat_ne_blokiruet(base_url):
+    """Прошлый невозврат больше НЕ блокирует новую заявку (история ушла из решения).
 
     Дано: клиент получил заём (заявка одобрена с суммой), исход зафиксирован
           как «не вернули» через POST /loans/{id}/repay.
     Когда: тот же клиент (та же связка ФИО+ДР+телефон) подаёт новую заявку.
-    Тогда: HTTP 200 и «declined» — внутренняя история сработала.
+    Тогда: HTTP 200 и approved — внутренняя история на решение не влияет.
     """
     phone = "+79995550004"
     first = httpx.post(
@@ -102,4 +101,4 @@ def test_sobstvenniy_nevozvrat_blokiruet_novuyu_vydachu(base_url):
         f"{base_url}/applications/v2", json=_payload(BKI_CLEAN, phone=phone), timeout=30,
     )
     assert second.status_code == 200
-    assert second.json()["status"] == "declined"
+    assert second.json()["status"] == "approved"

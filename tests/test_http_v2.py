@@ -7,8 +7,9 @@ import db
 import server
 from bki import BkiOutcome
 from bki_parse import BkiFeatures
-from models import BkiReport
+from models import ExternalServiceCall
 from repository import create_loan
+from sqlalchemy import select
 
 VALID = {
     "last_name": "Иванов", "first_name": "Иван", "phone": "+79991234567",
@@ -132,44 +133,56 @@ async def test_v2_persisted(async_client, clean_blacklist):
     assert row.email == "ivan@example.ru"
 
 
-async def test_v2_saves_bki_report(async_client, clean_blacklist):
+async def test_v2_logs_bki_call_to_journal(async_client, clean_blacklist):
+    # БКИ собирается в фоне и пишется в JSON-журнал (не в типизированные колонки).
     resp = await async_client.post("/applications/v2", json=VALID)
-    assert resp.status_code == 200
     application_id = uuid_mod.UUID(resp.json()["application_id"])
     async with db.AsyncSessionLocal() as session:
-        stored = await session.get(BkiReport, application_id)
-    assert stored is not None
-    assert stored.status == "ok"
-    assert stored.score == 702
-    assert stored.raw_xml == "<ok/>"
+        rows = (await session.execute(
+            select(ExternalServiceCall).where(
+                ExternalServiceCall.application_id == application_id,
+                ExternalServiceCall.service == "bki",
+            )
+        )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].status == "ok"
+    assert rows[0].payload["response"] == {"ok": ""}  # xml_to_dict("<ok/>")
 
 
-async def test_v2_declined_on_bki_delinquency(async_client, clean_blacklist, monkeypatch):
+async def test_v2_bki_delinquency_no_longer_declines(async_client, clean_blacklist, monkeypatch):
+    # MVP: БКИ ушёл из решения — просрочка в бюро больше НЕ заворачивает заявку.
     async def fake(passport):
         return BkiOutcome(status="ok", features=_features(delinquent=True), raw_xml="<bad/>")
     monkeypatch.setattr(server, "get_report_with_retry", fake)
 
     resp = await async_client.post("/applications/v2", json=VALID)
     body = resp.json()
-    assert body["status"] == "declined"
-    assert any("просрочка или списание" in r for r in body["reasons"])
+    assert body["status"] == "approved"
+    assert body["reasons"] == []
 
 
-async def test_v2_bki_unavailable_fail_closed(async_client, clean_blacklist, monkeypatch):
+async def test_v2_bki_unavailable_does_not_affect_decision(async_client, clean_blacklist, monkeypatch):
+    # MVP: БКИ ушёл из решения — недоступность бюро НЕ заворачивает заявку,
+    # но её след (unavailable) всё равно копится в bki_reports (фоновый сбор).
     async def fake(passport):
         return BkiOutcome(status="unavailable", features=None, raw_xml=None)
     monkeypatch.setattr(server, "get_report_with_retry", fake)
 
     resp = await async_client.post("/applications/v2", json=VALID)
-    assert resp.status_code == 200               # отказ — это 200 + declined, не 5xx
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "declined"          # fail-closed: бюро молчит — отказ
-    assert any("Не удалось проверить кредитную историю" in r for r in body["reasons"])
+    assert body["status"] == "approved"          # бюро не влияет на решение
     application_id = uuid_mod.UUID(body["application_id"])
     async with db.AsyncSessionLocal() as session:
-        stored = await session.get(BkiReport, application_id)
-    assert stored.status == "unavailable"        # след сбоя сохранён и при отказе
-    assert stored.score is None
+        rows = (await session.execute(
+            select(ExternalServiceCall).where(
+                ExternalServiceCall.application_id == application_id,
+                ExternalServiceCall.service == "bki",
+            )
+        )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].status == "unavailable"        # но данные для статистики собраны
+    assert rows[0].payload["response"] is None    # сырого ответа не было
 
 
 async def test_v2_no_history_is_approved(async_client, clean_blacklist, monkeypatch):
@@ -182,18 +195,17 @@ async def test_v2_no_history_is_approved(async_client, clean_blacklist, monkeypa
     assert resp.json()["status"] == "approved"
 
 
-async def test_v2_declined_on_second_active_loan(async_client, clean_blacklist):
-    # Первая заявка одобрена с суммой → заём «выдано».
+async def test_v2_active_loan_no_longer_declines(async_client, clean_blacklist):
+    # MVP: внутренняя история ушла из решения — активный заём больше НЕ заворачивает.
     first = await async_client.post("/applications/v2", json=VALID)
     assert first.json()["status"] == "approved"
-    # Вторая заявка того же человека (тот же VALID = тот же identity) → отказ.
+    # Вторая заявка того же человека (тот же VALID = тот же identity) → тоже одобрена.
     second = await async_client.post("/applications/v2", json=VALID)
-    body = second.json()
-    assert body["status"] == "declined"
-    assert any("Активный заём" in r for r in body["reasons"])
+    assert second.json()["status"] == "approved"
 
 
-async def test_v2_declined_after_prior_default(async_client, clean_blacklist):
+async def test_v2_prior_default_no_longer_declines(async_client, clean_blacklist):
+    # MVP: прошлый невозврат больше НЕ влияет на решение (история ушла из решения).
     first = await async_client.post("/applications/v2", json=VALID)
     application_id = first.json()["application_id"]
     # Фиксируем невозврат существующей ручкой.
@@ -202,6 +214,19 @@ async def test_v2_declined_after_prior_default(async_client, clean_blacklist):
     )
     assert repay.status_code == 200
     second = await async_client.post("/applications/v2", json=VALID)
-    body = second.json()
-    assert body["status"] == "declined"
-    assert any("невозврат" in r for r in body["reasons"])
+    assert second.json()["status"] == "approved"
+
+
+async def test_v2_logs_blacklist_call_to_journal(async_client, clean_blacklist):
+    # Вызов чёрного списка тоже пишется в единый JSON-журнал.
+    resp = await async_client.post("/applications/v2", json=VALID)
+    application_id = uuid_mod.UUID(resp.json()["application_id"])
+    async with db.AsyncSessionLocal() as session:
+        rows = (await session.execute(
+            select(ExternalServiceCall).where(
+                ExternalServiceCall.application_id == application_id,
+                ExternalServiceCall.service == "stoplist",
+            )
+        )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].payload["response"] == {"in_terror_list": False}

@@ -9,39 +9,36 @@
 
 ## Как это работает (заявка v2)
 
-Поток обработки `POST /applications/v2` — с проверкой паспорта по внешнему
-СтопЛисту и сохранением в БД:
+Поток обработки `POST /applications/v2` — синхронное решение по возрасту и
+чёрному списку (ответ клиенту сразу), БКИ собирается в фоне для статистики:
 
 ```mermaid
 sequenceDiagram
     participant Front as Front (Web/Mobile)
     participant PetBank as PetBank API
-    participant BKI as БКИ (КредБюро)
     participant BlackList as Black List Service
     participant DB as PostgreSQL
+    participant BKI as БКИ (КредБюро)
     participant Client as Клиент
 
     Front->>PetBank: POST /applications/v2<br/>email, passport, region, loan_purpose, ...
     Note right of PetBank: Валидация данных<br/>формат, обязательные поля
 
-    PetBank->>BKI: POST /report (XML, windows-1251)<br/>паспорт → кредитный отчёт
-    BKI-->>PetBank: отчёт: скоринг-балл, договоры, просрочки
-    Note right of PetBank: Сбой бюро → пауза 10 с, один повтор.<br/>Снова сбой → fail-closed: отказ,<br/>отчёт помечен «unavailable»
-
     PetBank->>BlackList: GET /check?passport={passport}
     BlackList-->>PetBank: { in_terror_list: true/false }
 
-    PetBank->>DB: Внутренняя история клиента<br/>активный заём? прошлый невозврат?
-    DB-->>PetBank: флаги по займам
+    Note right of PetBank: Решение — только возраст + чёрный список:<br/>возраст < 18 → declined<br/>паспорт в списке → declined<br/>СтопЛист недоступен → declined (fail-closed)<br/>иначе → approved
 
-    Note right of PetBank: Решение (причины суммируются):<br/>возраст < 18 → declined<br/>паспорт в списке → declined<br/>СтопЛист недоступен → declined (fail-closed)<br/>просрочка/списание в БКИ → declined<br/>БКИ недоступен → declined (fail-closed)<br/>активный заём → declined<br/>прошлый невозврат → declined<br/>иначе → approved
-
-    PetBank->>DB: INSERT application + bki_report<br/>заявка, решение, отчёт бюро (всегда)
+    PetBank->>DB: INSERT application + вызов ЧС в журнал (JSON)<br/>(+ заём при approved с суммой)
     DB-->>PetBank: OK, application_id: UUID
 
     PetBank-->>Front: 200 OK<br/>{ application_id, status: approved/declined, reasons }
-
     Front-->>Client: Показать результат<br/>UUID заявки + статус
+
+    Note right of PetBank: Дальше — в фоне, после ответа клиенту
+    PetBank->>BKI: POST /report (XML, windows-1251)<br/>паспорт → кредитный отчёт
+    BKI-->>PetBank: отчёт: балл, договоры, просрочки<br/>(сбой → пауза, повтор; на решение НЕ влияет)
+    PetBank->>DB: INSERT вызова БКИ в журнал external_service_calls (JSON)<br/>весь ответ бюро — данные для скоркарты
 ```
 
 > Поддерживать в актуальном состоянии: при изменении ручек/полей/правил
