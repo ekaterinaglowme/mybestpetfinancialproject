@@ -41,8 +41,8 @@ from bki import get_report_with_retry
 from bki_parse import BkiFeatures, xml_to_dict
 
 from logging_setup import request_id_ctx, setup_logging
-from metrics import (APPLICATION_AMOUNT_RUB, DB_WRITE_SECONDS, DECISIONS,
-                     RATE_LIMITED, REJECTION_REASONS)
+from metrics import (APPLICATION_AMOUNT_RUB, BKI_COLLECT_SECONDS, DB_WRITE_SECONDS,
+                     DECISIONS, HOT_PATH_SECONDS, RATE_LIMITED, REJECTION_REASONS)
 from ratelimit import TokenBucket, install_rate_limiter
 
 logger = logging.getLogger(__name__)
@@ -509,6 +509,7 @@ async def collect_bki_report(application_id: uuid.UUID, passport: str) -> None:
     Идёт ВНЕ горячего пути (после ответа клиенту), в своей транзакции. На решение
     не влияет: весь ответ бюро (приведённый к JSON) копится для будущей скоркарты.
     """
+    cold_start = time.perf_counter()
     outcome = await get_report_with_retry(passport)
     response = xml_to_dict(outcome.raw_xml) if outcome.raw_xml else None
     try:
@@ -520,6 +521,8 @@ async def collect_bki_report(application_id: uuid.UUID, passport: str) -> None:
             )
     except SQLAlchemyError:
         logger.exception("Не удалось записать вызов БКИ по заявке %s", application_id)
+    finally:
+        BKI_COLLECT_SECONDS.observe(time.perf_counter() - cold_start)
 
 
 @app.post("/applications/v2", response_model=ApplicationDecision)
@@ -528,6 +531,7 @@ async def create_application_v2(
 ):
     # Решение — только по возрасту и чёрному списку (быстрые проверки). БКИ ушёл
     # с горячего пути: он собирается в фоне для статистики и на решение не влияет.
+    hot_start = time.perf_counter()  # горячий путь: база+ЧС+решение, без фонового БКИ
     try:
         in_black_list = await check_passport(payload.passport)
         check_failed = False
@@ -585,6 +589,8 @@ async def create_application_v2(
         logger.exception("Не удалось сохранить заявку")
         raise HTTPException(status_code=500, detail="Ошибка сохранения заявки") from exc
 
+    # Замер горячего пути завершён ДО постановки фоновой задачи (её время — отдельно).
+    HOT_PATH_SECONDS.observe(time.perf_counter() - hot_start)
     # Собрать отчёт БКИ в фоне (после ответа клиенту) — данные для скоркарты.
     background_tasks.add_task(
         collect_bki_report, uuid.UUID(decision["application_id"]), payload.passport,

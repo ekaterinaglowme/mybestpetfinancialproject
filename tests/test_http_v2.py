@@ -230,3 +230,17 @@ async def test_v2_logs_blacklist_call_to_journal(async_client, clean_blacklist):
         )).scalars().all()
     assert len(rows) == 1
     assert rows[0].payload["response"] == {"in_terror_list": False}
+
+
+async def test_hot_and_cold_latency_metrics_separate(async_client, clean_blacklist):
+    # Горячий приём (база+ЧС) и холодный фоновый БКИ меряются РАЗДЕЛЬНЫМИ метриками.
+    from prometheus_client import REGISTRY
+
+    def val(name):
+        return REGISTRY.get_sample_value(name) or 0.0
+
+    before_hot = val("petbank_hot_path_seconds_count")
+    before_cold = val("petbank_bki_collect_seconds_count")
+    await async_client.post("/applications/v2", json=VALID)
+    assert val("petbank_hot_path_seconds_count") == before_hot + 1
+    assert val("petbank_bki_collect_seconds_count") == before_cold + 1
