@@ -41,6 +41,11 @@ class User(Base):
 
 class Application(Base):
     __tablename__ = "applications"
+    __table_args__ = (
+        # Под get_user_loan_flags (поиск заявок клиента по user_id + join loans).
+        # FK в PostgreSQL сам индекс не создаёт — заводим явно.
+        Index("ix_applications_user_id", "user_id"),
+    )
 
     application_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
