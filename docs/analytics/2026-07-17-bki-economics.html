@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>БКИ в PetBank — что забираем и как перестроить экономику</title>
+<style>
+  @page { size: A4; margin: 15mm 15mm 13mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #1c2733; font-size: 10.4px; line-height: 1.5; margin: 0;
+  }
+  h1 { font-size: 19px; margin: 0 0 2px; color: #14314f; letter-spacing: -.2px; }
+  .sub { color: #6b7a8d; font-size: 10px; margin-bottom: 12px; }
+  h2 {
+    font-size: 12.5px; color: #14314f; margin: 16px 0 6px;
+    padding-bottom: 3px; border-bottom: 2px solid #14314f;
+  }
+  h2 .n { color: #b23b2e; font-weight: 800; margin-right: 6px; }
+  p { margin: 5px 0; }
+  .muted { color: #6b7a8d; }
+  .red { color: #b23b2e; } .green { color: #1e7a44; } .blue { color: #14314f; }
+  b.big { font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0; page-break-inside: avoid; }
+  th, td { text-align: left; padding: 4px 7px; border-bottom: 1px solid #e4e9ef; vertical-align: top; }
+  th { background: #14314f; color: #fff; font-weight: 600; font-size: 9.6px; }
+  td.mono, th.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  tr:nth-child(even) td { background: #f6f8fa; }
+  .tldr {
+    background: #f2f6fb; border: 1px solid #d3e0ee; border-left: 4px solid #14314f;
+    border-radius: 4px; padding: 9px 12px; margin: 10px 0 4px;
+  }
+  .tldr ul { margin: 4px 0 0; padding-left: 18px; }
+  .tldr li { margin: 3px 0; }
+  .formula {
+    background: #f6f8fa; border: 1px solid #e0e6ec; border-radius: 4px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.6px;
+    padding: 8px 12px; margin: 7px 0; page-break-inside: avoid;
+  }
+  .grid2 { display: flex; gap: 12px; page-break-inside: avoid; }
+  .grid2 > div { flex: 1; }
+  .verdict {
+    background: #fbeeec; border: 1px solid #e9c4bd; border-left: 4px solid #b23b2e;
+    border-radius: 4px; padding: 8px 12px; margin: 8px 0; page-break-inside: avoid;
+  }
+  .note { font-size: 9.2px; color: #6b7a8d; margin-top: 3px; }
+  ol { margin: 5px 0; padding-left: 20px; } ol li { margin: 4px 0; }
+  .pill { display: inline-block; background: #eef2f7; border-radius: 3px; padding: 0 5px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 9.4px; color: #14314f; }
+  footer { margin-top: 14px; padding-top: 7px; border-top: 1px solid #e4e9ef;
+    font-size: 9px; color: #7a8896; }
+</style>
+</head>
+<body>
+
+  <h1>БКИ в PetBank: что забираем и как перестроить экономику выдачи</h1>
+  <div class="sub">Аналитическая записка · 17 июля 2026 · источники: <span class="pill">bki_parse.py</span> <span class="pill">loans.py</span> <span class="pill">server.py</span> <span class="pill">bki-scoring-summary.md</span></div>
+
+  <div class="tldr">
+    <b>Коротко</b>
+    <ul>
+      <li>Из ответа бюро забираем <b>11 фич</b>, но в решении о выдаче работает <b>только одна</b> — текущая просрочка.</li>
+      <li>При ставках 2–10% безубыточность требует доли невозврата <b>2–9%</b>, а по факту среди одобренных — <b class="red">36.6%</b>. Поток одобренных <b class="red">глубоко убыточен</b>.</li>
+      <li>Сильнейшие предикторы (<span class="mono">no_history</span> 51%, <span class="mono">inq_90</span>, <span class="mono">score</span>, <span class="mono">n_late</span>) уже собираются — их включение в правила и есть рычаг перестройки.</li>
+    </ul>
+  </div>
+
+  <h2><span class="n">1</span>Что банк забирает из БКИ</h2>
+  <p>Один запрос в бюро на паспорт → парсер <span class="mono">bki_parse.py</span> достаёт из XML-ответа фичи будущей скоркарты (суммы в копейках):</p>
+  <table>
+    <tr><th>Фича</th><th>Что значит</th><th>Откуда в ответе бюро</th><th>Сигнал</th></tr>
+    <tr><td class="mono">score</td><td>балл бюро</td><td class="mono">Скоринг/Балл</td><td>↑ лучше (в данных 270–880)</td></tr>
+    <tr><td class="mono">n_contracts</td><td>договоров в истории</td><td>кол-во <span class="mono">Договор</span></td><td>опыт (4+ — защитный)</td></tr>
+    <tr><td class="mono">has_writeoff</td><td>списание / просрочка</td><td>состояние <span class="mono">52</span>/<span class="mono">59</span></td><td>негатив</td></tr>
+    <tr><td class="mono">has_current_delinquency</td><td>активная просрочка сейчас</td><td>негатив + сумма&gt;0</td><td class="red">единственный БКИ-стоп в решении</td></tr>
+    <tr><td class="mono">overdue_amount_kop</td><td>сумма просрочки</td><td class="mono">Суммы/ПросроченнаяЗадолженность</td><td>глубина долга</td></tr>
+    <tr><td class="mono">max_dpd</td><td>худший ранг дисциплины (0–6)</td><td class="mono">ПлтСтрока</td><td>дисциплина</td></tr>
+    <tr><td class="mono">n_late</td><td>сколько «плохих» отметок</td><td>символы <span class="mono">ПлтСтрока</span></td><td>систематичность</td></tr>
+    <tr><td class="mono">debt_load_kop</td><td>текущая долговая нагрузка</td><td>тела живых договоров</td><td>закредитованность</td></tr>
+    <tr><td class="mono">inq_30/90/365</td><td>запросов в бюро за период</td><td class="mono">ИнформационнаяЧасть/Запросы</td><td>«кредитный голод»</td></tr>
+    <tr><td class="mono">status</td><td>ok / no_history / unavailable</td><td class="mono">КодРезультата 0/3/9+пр.</td><td>доступность истории</td></tr>
+  </table>
+  <p class="note"><b>Механика:</b> паспорт → XML-запрос (win-1251, Серия+Номер) → бюро → <span class="mono">КодРезультата</span>: <b>0</b> = фичи, <b>9</b> = «недоступно, повтори», иное = истории нет.</p>
+
+  <h2><span class="n">2</span>Экономика выдачи сегодня</h2>
+  <div class="grid2">
+    <div>
+      <p><b>Доход</b> (<span class="mono">loans.py</span>) — ставка к телу займа падает с возрастом:</p>
+      <div class="formula">
+        0–7 дней&nbsp;&nbsp;→ 10%<br>
+        8–30 дней → 5%<br>
+        &gt;30 дней&nbsp;&nbsp;→ 2%<br><br>
+        возврат&nbsp;&nbsp;→ прибыль = тело × ставка<br>
+        невозврат → убыток&nbsp;= тело
+      </div>
+    </div>
+    <div>
+      <p><b>Unit-economics на «рубль тела»</b> (b — доля невозврата, r — ставка):</p>
+      <div class="formula">
+        EV = r·(1−b) − b<br><br>
+        безубыточность при<br>
+        <b>b* = r / (1 + r)</b>
+      </div>
+    </div>
+  </div>
+  <table>
+    <tr><th>Ставка r</th><th class="mono">b* (breakeven)</th><th>Факт: bad rate одобренных</th><th>Во сколько выше порога</th></tr>
+    <tr><td class="mono">10%</td><td class="mono green">9.1%</td><td class="mono red" rowspan="3" style="vertical-align:middle;background:#fbeeec"><b class="big">36.6%</b></td><td class="mono">×4.0</td></tr>
+    <tr><td class="mono">5%</td><td class="mono green">4.8%</td><td class="mono">×7.7</td></tr>
+    <tr><td class="mono">2%</td><td class="mono green">2.0%</td><td class="mono">×18.7</td></tr>
+  </table>
+  <div class="verdict">
+    <b class="red">Вердикт.</b> При любой из ставок фактическая доля невозврата среди одобренных <b>в 4–19 раз</b> выше точки безубыточности.
+    Пример при лучшей ставке 10%: <span class="mono">EV = 0.10·0.634 − 0.366 = <b class="red">−0.30</b></span> — банк теряет ~30 копеек на каждом выданном рубле тела.
+  </div>
+
+  <h2><span class="n">3</span>Что простаивает</h2>
+  <p>В решении (<span class="mono">make_decision_v2</span>) из всего БКИ используется <b>только текущая просрочка</b>. Остальное собирается «для будущей скоркарты» и на выдачу <b>не влияет</b> — хотя именно это сильнейшие предикторы невозврата:</p>
+  <table>
+    <tr><th>Признак</th><th>bad rate</th><th>База 36.6%</th><th>Комментарий</th></tr>
+    <tr><td class="mono">no_history</td><td class="mono red"><b>51%</b></td><td>+14.4 п.п.</td><td class="red">Самая дорогая дыра: сейчас «нет истории» = <b>НЕ отказ</b>. 442К займов, 225К дефолтов.</td></tr>
+    <tr><td class="mono">inq_90 ≥ 6</td><td class="mono red">44.9%</td><td>+8.3 п.п.</td><td>«Кредитный голод»: ступенька ровно с 6 запросов в квартал.</td></tr>
+    <tr><td class="mono">score Q1 (низкий)</td><td class="mono red">42.6%</td><td>+6.0 п.п.</td><td>Монотонно: Q5 (лучшие) — только 24.8%.</td></tr>
+    <tr><td class="mono">n_late ≥ 6</td><td class="mono red">41%</td><td>+4.4 п.п.</td><td>Систематическая недисциплина.</td></tr>
+    <tr><td class="mono">n_contracts 4+</td><td class="mono green">26.8%</td><td>−9.8 п.п.</td><td class="green">Защитный фактор: опытные возвращают лучше.</td></tr>
+  </table>
+
+  <h2><span class="n">4</span>Как перестроить модель</h2>
+  <p>Рычаг — <b>включить простаивающие фичи в правила выдачи</b>, двигая долю невозврата к порогу безубыточности:</p>
+  <table>
+    <tr><th>Правило</th><th>Зачем</th><th>Цена</th></tr>
+    <tr><td class="mono">no_history → отказ / сниженный лимит</td><td>закрывает дыру 51%</td><td>режет ~15% потока</td></tr>
+    <tr><td class="mono">inq_90 ≥ 6 → отказ</td><td>порог виден в данных явно</td><td>малый объём</td></tr>
+    <tr><td class="mono">score &lt; нижнего квинтиля → отказ</td><td>монотонный предиктор</td><td>~20% нижнего хвоста</td></tr>
+    <tr><td class="mono">n_late ≥ 6 → отказ</td><td>систематичность просрочек</td><td>средний объём</td></tr>
+  </table>
+  <p>Эффект каждого правила: <b class="green">bad rate ↓</b> (ближе к breakeven), но и <b class="red">поток одобрений ↓</b> — это trade-off «качество ↔ объём».</p>
+  <p class="note"><b>Оговорки (важно).</b> Мы видим только одобренных (selection bias) → правила можно <b>ужесточать, но не ослаблять</b> на этих данных. Правила пересекаются → итоговую комбинацию (насколько упадёт bad rate и сколько потока отсечём) считать <b>отдельной симуляцией</b>, а не суммой одномерных срезов.</p>
+
+  <h2><span class="n">5</span>Приоритеты</h2>
+  <ol>
+    <li><b>Закрыть <span class="mono">no_history</span></b> — самый большой эффект на убыток (отказ или сниженный лимит).</li>
+    <li>Добавить жёсткие отсечки <span class="mono">inq_90 ≥ 6</span> и <span class="mono">score</span> нижнего квинтиля.</li>
+    <li>Перейти от разрозненных правил к <b>скоркарте</b> (единый порог по совокупности фич) — правила уже валидированы кросс-проверкой на независимом источнике.</li>
+    <li>Пересчитать экономику под целевой bad rate: одних отсечек мало — рычагами остаются также ставка и срок займа.</li>
+  </ol>
+
+  <footer>
+    Модель относительная (unit-economics на рубль тела), абсолютные суммы не используются. Доли невозврата — из аналитики созревших займов
+    (<span class="mono">loans.status</span>), базовая линия 36.6% среди одобренных с историей. Не является предписанием кредитной политики — набор правил утверждает продукт.
+  </footer>
+
+</body>
+</html>
