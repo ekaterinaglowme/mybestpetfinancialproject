@@ -14,6 +14,12 @@ JSONB журнала) → её потребляют и Superset, и процед
 **Tech Stack:** PostgreSQL 16, Alembic (async, asyncpg), `pg_cron` 1.6 (на проде), pytest blackbox
 (docker compose), plpgsql-процедура.
 
+> **⚠️ ОБНОВЛЕНО 2026-07-18:** PR #52 (`0007_drop_bki_reports`) **ВЛИТ в `main`**. Значит миграции
+> этого плана сдвигаются на +1: `0007_scoring_dataset` → **`0008_scoring_dataset`** (down_revision
+> `0007_drop_bki_reports`), `0008_scoring_dataset_cron` → **`0009_scoring_dataset_cron`** (down_revision
+> `0008_scoring_dataset`). Ниже номера `0007`/`0008` читать как `0008`/`0009`. Коллизия `0007` с #52
+> больше не актуальна (#52 выиграл `0007`, витрина #50 закрыта).
+
 ## Global Constraints
 
 - Ветка от `origin/main` через worktree; rebase-only, мёрж-коммиты запрещены.
