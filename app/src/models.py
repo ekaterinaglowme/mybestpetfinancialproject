@@ -3,8 +3,8 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import (BigInteger, Boolean, CheckConstraint, ForeignKey, Index,
-                        Integer, Numeric, String, Text, UniqueConstraint, func)
+from sqlalchemy import (BigInteger, CheckConstraint, ForeignKey, Index, Integer,
+                        Numeric, String, UniqueConstraint, func)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON, Date, DateTime, Uuid
@@ -83,40 +83,6 @@ class Loan(Base):
     status: Mapped[str] = mapped_column(
         String, default="выдано", server_default="выдано",
     )
-
-
-class BkiReport(Base):
-    """Ответ БКИ по заявке (1:1): статус похода, фичи, сырой XML.
-
-    Сырой ответ бюро — юридический след и запас на переразбор при добавлении
-    новых фич. Суммы в копейках, как отдаёт протокол бюро.
-    """
-
-    __tablename__ = "bki_reports"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('ok', 'no_history', 'unavailable')",
-            name="ck_bki_report_status",
-        ),
-    )
-
-    application_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("applications.application_id"), primary_key=True
-    )
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    status: Mapped[str] = mapped_column(String)
-    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    n_contracts: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    has_writeoff: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    has_current_delinquency: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    overdue_amount_kop: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    max_dpd: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    n_late: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    debt_load_kop: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    inq_30: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    inq_90: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    inq_365: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    raw_xml: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ExternalServiceCall(Base):

@@ -7,9 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bki_parse import BkiFeatures
 from metrics import DB_WRITE_SECONDS
-from models import Application, BkiReport, ExternalServiceCall, Loan, User
+from models import Application, ExternalServiceCall, Loan, User
 
 
 async def get_or_create_user(
@@ -89,43 +88,6 @@ async def create_loan(
 async def get_loan(session: AsyncSession, application_id: uuid.UUID) -> Loan | None:
     """Вернуть заём по application_id или None."""
     return await session.get(Loan, application_id)
-
-
-async def save_bki_report(
-    session: AsyncSession,
-    *,
-    application_id: uuid.UUID,
-    fetched_at: datetime,
-    status: str,
-    features: BkiFeatures | None,
-    raw_xml: str | None,
-) -> BkiReport:
-    """Сохранить итог похода в БКИ; при отсутствии фич (сбой/нет истории) — NULL."""
-    feature_values = (
-        dict(
-            score=features.score,
-            n_contracts=features.n_contracts,
-            has_writeoff=features.has_writeoff,
-            has_current_delinquency=features.has_current_delinquency,
-            overdue_amount_kop=features.overdue_amount_kop,
-            max_dpd=features.max_dpd,
-            n_late=features.n_late,
-            debt_load_kop=features.debt_load_kop,
-            inq_30=features.inq_30,
-            inq_90=features.inq_90,
-            inq_365=features.inq_365,
-        )
-        if features is not None
-        else {}
-    )
-    report = BkiReport(
-        application_id=application_id, fetched_at=fetched_at, status=status,
-        raw_xml=raw_xml, **feature_values,
-    )
-    session.add(report)
-    with DB_WRITE_SECONDS.labels(operation="save_bki_report").time():
-        await session.flush()
-    return report
 
 
 async def get_user_loan_flags(
